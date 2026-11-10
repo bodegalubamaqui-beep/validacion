@@ -1,0 +1,171 @@
+/**
+ * LUBAMAQUI · Validación de cupo y pedidos — SERVIDOR (Google Apps Script)
+ *
+ * Qué hace: guarda las bases, los pedidos y la bitácora en esta hoja de Google,
+ * y solo atiende a los correos de Gmail que estén en la hoja USUARIOS.
+ *
+ * Instalación (resumen; la guía completa está en LEEME_INSTALACION.txt):
+ *  1. Crea una hoja de cálculo nueva en Google Sheets → Extensiones → Apps Script → pega este archivo.
+ *  2. Cambia CLIENT_ID (abajo) por el ID de cliente de Google que creaste.
+ *  3. Ejecuta la función «instalar» una vez (acepta los permisos).
+ *  4. Implementar → Nueva implementación → Aplicación web → Ejecutar como: Yo · Quién tiene acceso: Cualquier usuario.
+ *  5. Copia la URL que termina en /exec y pégala en la página.
+ */
+const CLIENT_ID = 'PEGAR_AQUI_EL_CLIENT_ID.apps.googleusercontent.com';
+const TZ = 'America/Guayaquil';
+const H = { BASE: 'BASE_CLIENTES', CAR: 'CARTERA', PED: 'PEDIDOS', USU: 'USUARIOS', LOG: 'BITACORA', CFG: 'CONFIG' };
+const COLS_BASE = ['RUC', 'RAZON SOCIAL', 'NOMBRE COMERCIAL', 'VENDEDOR', 'TARIFA', 'CUPO CREDITO', 'DIAS CREDITO', 'SALDO'];
+const COLS_CAR = ['cliente', 'vence', 'saldovencido', 'saldototal'];
+const COLS_PED = ['id', 'fecha_control', 'no_interno', 'fecha', 'cliente', 'factura', 'total', 'resultado', 'dias_vencidos', 'observacion_cupo', 'accion', 'responsable', 'observaciones', 'registrado_por', 'registrado_el', 'actualizado_por', 'actualizado_el', 'estado'];
+const COLS_USU = ['correo', 'nombre', 'rol', 'activo'];
+const COLS_LOG = ['fecha_hora', 'usuario', 'rol', 'accion', 'detalle'];
+const NIVEL = { CONSULTA: 1, VALIDADOR: 2, ADMIN: 3 };
+const PERMISO = { me: 'CONSULTA', bases: 'CONSULTA', pedidos: 'CONSULTA', bitacora: 'VALIDADOR', addPedidos: 'VALIDADOR', updatePedido: 'VALIDADOR', deletePedido: 'ADMIN', setBase: 'ADMIN', setCartera: 'ADMIN', setConfig: 'ADMIN' };
+
+/* ---------- instalación (se ejecuta una sola vez a mano) ---------- */
+function instalar() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const def = (nombre, cols, anchoTexto) => {
+    let sh = ss.getSheetByName(nombre) || ss.insertSheet(nombre);
+    sh.getRange(1, 1, 1, cols.length).setValues([cols]).setFontWeight('bold').setBackground('#0f2a4a').setFontColor('#ffffff');
+    sh.setFrozenRows(1); return sh;
+  };
+  const b = def(H.BASE, COLS_BASE); b.getRange('A:E').setNumberFormat('@'); b.getRange('F:H').setNumberFormat('0.00');
+  const c = def(H.CAR, COLS_CAR); c.getRange('A:B').setNumberFormat('@');
+  const p = def(H.PED, COLS_PED); p.getRange('A:F').setNumberFormat('@'); p.getRange('H:R').setNumberFormat('@');
+  def(H.LOG, COLS_LOG).getRange('A:E').setNumberFormat('@');
+  const u = def(H.USU, COLS_USU);
+  def(H.CFG, ['clave', 'valor']);
+  const yo = (Session.getActiveUser().getEmail() || '').toLowerCase();
+  if (u.getLastRow() < 2 && yo) u.getRange(2, 1, 1, 4).setValues([[yo, 'Administrador', 'ADMIN', 'SI']]);
+  if (!cfgGet('umbral')) cfgSet('umbral', '61');
+  if (!cfgGet('pedV')) cfgSet('pedV', String(Date.now()));
+  const sobrante = ss.getSheetByName('Hoja 1') || ss.getSheetByName('Sheet1'); if (sobrante && ss.getSheets().length > 1) ss.deleteSheet(sobrante);
+  return 'Listo. Agrega los correos de tus auxiliares en la hoja USUARIOS (rol: ADMIN, VALIDADOR o CONSULTA).';
+}
+
+/* ---------- punto de entrada ---------- */
+function doGet() { return salida({ ok: true, servicio: 'validacion-cupo' }); }
+function doPost(e) {
+  let req;
+  try { req = JSON.parse(e.postData.contents); } catch (err) { return salida({ ok: false, error: 'JSON', mensaje: 'Solicitud inválida' }); }
+  try {
+    const u = autenticar(req.token);
+    const minimo = PERMISO[req.action]; if (!minimo) throw falla('ACCION', 'Acción desconocida');
+    if (NIVEL[u.rol] < NIVEL[minimo]) throw falla('SIN_PERMISO', 'Tu rol (' + u.rol + ') no permite esta acción.');
+    const r = ACCIONES[req.action](req, u);
+    return salida(Object.assign({ ok: true }, r));
+  } catch (err) { return salida({ ok: false, error: err.codigo || 'ERROR', mensaje: String(err.message || err), correo: err.correo }); }
+}
+const salida = o => ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
+const falla = (codigo, mensaje, extra) => { const e = new Error(mensaje); e.codigo = codigo; if (extra) Object.assign(e, extra); return e; };
+
+/* ---------- identidad: token de Google verificado en el servidor ---------- */
+function autenticar(token) {
+  if (!token) throw falla('TOKEN', 'Inicia sesión con Google.');
+  const cache = CacheService.getScriptCache();
+  const dig = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, token).map(b => ('0' + (b & 255).toString(16)).slice(-2)).join('');
+  let correo = cache.get('tk' + dig);
+  if (!correo) {
+    const r = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(token), { muteHttpExceptions: true });
+    if (r.getResponseCode() !== 200) throw falla('TOKEN', 'La sesión de Google venció. Vuelve a ingresar.');
+    const t = JSON.parse(r.getContentText());
+    if (t.aud !== CLIENT_ID) throw falla('TOKEN', 'El token no corresponde a esta aplicación.');
+    if (String(t.email_verified) !== 'true') throw falla('TOKEN', 'Correo no verificado.');
+    const resta = Number(t.exp) - Math.floor(Date.now() / 1000); if (resta < 30) throw falla('TOKEN', 'La sesión de Google venció. Vuelve a ingresar.');
+    correo = String(t.email).toLowerCase(); cache.put('tk' + dig, correo, Math.min(resta - 20, 3000));
+  }
+  const filas = hoja(H.USU).getRange(2, 1, Math.max(1, hoja(H.USU).getLastRow() - 1), 4).getValues();
+  const f = filas.find(x => String(x[0]).trim().toLowerCase() === correo);
+  if (!f || String(f[3]).trim().toUpperCase() === 'NO') throw falla('NO_AUTORIZADO', 'Tu correo (' + correo + ') no está autorizado. Pide al administrador que lo agregue.', { correo });
+  const rol = String(f[2]).trim().toUpperCase(); if (!NIVEL[rol]) throw falla('NO_AUTORIZADO', 'Rol inválido en USUARIOS para ' + correo, { correo });
+  return { correo, nombre: String(f[1] || correo), rol };
+}
+
+/* ---------- utilidades de hoja ---------- */
+const hoja = n => { const s = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(n); if (!s) throw falla('INSTALAR', 'Falta la hoja ' + n + '. Ejecuta «instalar».'); return s; };
+function asegurar(s, filas) { const falta = filas - s.getMaxRows(); if (falta > 0) s.insertRowsAfter(s.getMaxRows(), falta + 500); }
+const ahora = () => Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm:ss');
+function cfgAll() { const s = hoja(H.CFG), n = s.getLastRow(); const o = {}; if (n >= 2) s.getRange(2, 1, n - 1, 2).getValues().forEach(r => { o[r[0]] = String(r[1]); }); return o; }
+function cfgGet(k) { return cfgAll()[k]; }
+function cfgSet(k, v) { const s = hoja(H.CFG), n = s.getLastRow(); if (n >= 2) { const ks = s.getRange(2, 1, n - 1, 1).getValues(); for (let i = 0; i < ks.length; i++) if (ks[i][0] === k) { s.getRange(i + 2, 2).setValue(String(v)); return; } } asegurar(s, n + 1); s.getRange(n + 1, 1, 1, 2).setValues([[k, String(v)]]); }
+function registrar(u, accion, detalle) { const s = hoja(H.LOG); asegurar(s, s.getLastRow() + 1); s.getRange(s.getLastRow() + 1, 1, 1, 5).setValues([[ahora(), u.correo, u.rol, accion, String(detalle).slice(0, 4000)]]); }
+function bloqueado(fn) { const l = LockService.getScriptLock(); l.waitLock(25000); try { return fn(); } finally { l.releaseLock(); } }
+const tocarPed = () => cfgSet('pedV', String(Date.now()));
+
+/* ---------- acciones ---------- */
+const ACCIONES = {
+  me(req, u) { const c = cfgAll(); return { usuario: u, umbral: Number(c.umbral || 61), versiones: ver(c) }; },
+
+  bases(req) {
+    const c = cfgAll(), v = ver(c);
+    if (req.baseV && req.carV && String(req.baseV) === v.baseV && String(req.carV) === v.carV) return { sinCambios: true, versiones: v };
+    const sb = hoja(H.BASE), sc = hoja(H.CAR), nb = sb.getLastRow(), nc = sc.getLastRow();
+    return { versiones: v, base: nb >= 2 ? sb.getRange(2, 1, nb - 1, 8).getValues() : [], car: nc >= 2 ? sc.getRange(2, 1, nc - 1, 4).getValues() : [], meta: { baseAt: c.baseAt, baseBy: c.baseBy, carAt: c.carAt, carBy: c.carBy }, umbral: Number(c.umbral || 61) };
+  },
+
+  pedidos(req) {
+    const c = cfgAll(); if (req.pedV && String(req.pedV) === c.pedV) return { sinCambios: true, pedV: c.pedV };
+    const s = hoja(H.PED), n = s.getLastRow(); const desde = req.desde || Utilities.formatDate(new Date(Date.now() - 120 * 86400000), TZ, 'yyyy-MM-dd');
+    const f = n >= 2 ? s.getRange(2, 1, n - 1, 18).getValues() : [];
+    const items = f.filter(r => r[17] !== 'ELIMINADO' && String(r[1]) >= desde).map(r => [r[0], r[1], r[2], r[3], r[4], r[5], Number(r[6]) || 0, r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15], r[16]]);
+    return { pedV: c.pedV, items, desde };
+  },
+
+  addPedidos(req, u) {
+    const items = req.items || []; if (!items.length) return { agregados: 0, repetidos: 0 };
+    return bloqueado(() => {
+      const s = hoja(H.PED), n = s.getLastRow(); const existentes = new Set();
+      if (n >= 2) s.getRange(2, 1, n - 1, 18).getValues().forEach(r => { if (r[17] !== 'ELIMINADO' && r[2]) existentes.add(String(r[2])); });
+      const filas = []; let rep = 0; const t = ahora();
+      items.forEach((p, i) => { const no = String(p.no || '').trim(); if (no && existentes.has(no)) { rep++; return; } if (no) existentes.add(no);
+        const r = p.res || {}; filas.push([Utilities.getUuid().slice(0, 8) + i, p.fc || '', no, p.fe || '', String(p.cli || '').toUpperCase(), String(p.fa || ''), Number(p.to) || 0, r.H || '', r.I === '' || r.I == null ? '' : String(r.I), r.J || '', p.acc || 'PENDIENTE', p.resp || '', p.obs || '', req.importar ? 'IMPORTADO' : u.correo, req.importar ? '' : t, '', '', 'ACTIVO']); });
+      if (filas.length) { asegurar(s, n + filas.length); s.getRange(n + 1, 1, filas.length, 18).setValues(filas); }
+      registrar(u, req.importar ? 'IMPORTAR_PEDIDOS' : 'AGREGAR_PEDIDOS', filas.length + ' pedidos (' + rep + ' repetidos omitidos). Fecha control: ' + (items[0].fc || '') + '. N°: ' + filas.slice(0, 40).map(r => r[2]).join(', '));
+      if (filas.length) tocarPed();
+      return { agregados: filas.length, repetidos: rep };
+    });
+  },
+
+  updatePedido(req, u) {
+    const campos = { acc: 11, resp: 12, obs: 13 }, col = campos[req.campo]; if (!col) throw falla('CAMPO', 'Campo no editable');
+    let val = String(req.valor == null ? '' : req.valor); if (req.campo === 'acc' && ['', 'PENDIENTE', 'SOLUCIONADO'].indexOf(val) < 0) throw falla('VALOR', 'Acción inválida');
+    return bloqueado(() => {
+      const s = hoja(H.PED), n = s.getLastRow(), ids = s.getRange(2, 1, Math.max(1, n - 1), 1).getValues(); const i = ids.findIndex(x => x[0] === req.id); if (i < 0) throw falla('NO_EXISTE', 'El pedido ya no existe.');
+      const fila = i + 2, r = s.getRange(fila, 1, 1, 18).getValues()[0]; if (r[17] === 'ELIMINADO') throw falla('NO_EXISTE', 'El pedido fue eliminado.');
+      const antes = String(r[col - 1]); s.getRange(fila, col).setValue(val);
+      const res = req.res || {}; if (res.H) { s.getRange(fila, 8, 1, 3).setValues([[res.H, res.I === '' || res.I == null ? '' : String(res.I), res.J || r[9]]]); }
+      s.getRange(fila, 16, 1, 2).setValues([[u.correo, ahora()]]);
+      registrar(u, 'MODIFICAR_PEDIDO', r[2] + ' · ' + r[4] + ' · ' + req.campo + ': "' + antes + '" → "' + val + '"' + (res.H ? ' · resultado: ' + res.H : ''));
+      tocarPed(); return {};
+    });
+  },
+
+  deletePedido(req, u) {
+    return bloqueado(() => {
+      const s = hoja(H.PED), n = s.getLastRow(), ids = s.getRange(2, 1, Math.max(1, n - 1), 1).getValues(); const i = ids.findIndex(x => x[0] === req.id); if (i < 0) throw falla('NO_EXISTE', 'El pedido ya no existe.');
+      const fila = i + 2, r = s.getRange(fila, 1, 1, 18).getValues()[0];
+      s.getRange(fila, 16, 1, 3).setValues([[u.correo, ahora(), 'ELIMINADO']]).setNumberFormat('@');
+      registrar(u, 'ELIMINAR_PEDIDO', r[2] + ' · ' + r[4] + ' · total ' + r[6] + ' · fecha control ' + r[1]);
+      tocarPed(); return {};
+    });
+  },
+
+  setBase(req, u) { return cargar(H.BASE, 8, req.rows, 'baseV', 'baseAt', 'baseBy', 'CARGAR_BASE_CLIENTES', u); },
+  setCartera(req, u) { return cargar(H.CAR, 4, req.rows, 'carV', 'carAt', 'carBy', 'CARGAR_CARTERA', u); },
+
+  setConfig(req, u) { const v = Math.max(1, parseInt(req.umbral, 10) || 61); cfgSet('umbral', v); registrar(u, 'CAMBIAR_REGLA', 'Días vencidos para NO APROBADO: ' + v); return { umbral: v }; },
+
+  bitacora(req) { const s = hoja(H.LOG), n = s.getLastRow(), lim = Math.min(Number(req.limite) || 300, 2000); if (n < 2) return { filas: [] }; const ini = Math.max(2, n - lim + 1); return { filas: s.getRange(ini, 1, n - ini + 1, 5).getValues().reverse() }; }
+};
+function ver(c) { return { baseV: c.baseV || '0', carV: c.carV || '0', pedV: c.pedV || '0' }; }
+function cargar(nombre, ncol, rows, kV, kAt, kBy, accion, u) {
+  if (!Array.isArray(rows) || !rows.length) throw falla('DATOS', 'No llegaron filas para cargar.');
+  if (rows.some(r => !Array.isArray(r) || r.length !== ncol)) throw falla('DATOS', 'Formato de filas incorrecto.');
+  return bloqueado(() => {
+    const s = hoja(nombre), n = s.getLastRow(); if (n >= 2) s.getRange(2, 1, n - 1, ncol).clearContent();
+    asegurar(s, rows.length + 1); s.getRange(2, 1, rows.length, ncol).setValues(rows);
+    const t = ahora(); cfgSet(kV, String(Date.now())); cfgSet(kAt, t); cfgSet(kBy, u.correo);
+    registrar(u, accion, rows.length + ' filas'); return { filas: rows.length, versiones: ver(cfgAll()) };
+  });
+}
