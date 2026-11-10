@@ -1,171 +1,400 @@
-/**
- * LUBAMAQUI · Validación de cupo y pedidos — SERVIDOR (Google Apps Script)
- *
- * Qué hace: guarda las bases, los pedidos y la bitácora en esta hoja de Google,
- * y solo atiende a los correos de Gmail que estén en la hoja USUARIOS.
- *
- * Instalación (resumen; la guía completa está en LEEME_INSTALACION.txt):
- *  1. Crea una hoja de cálculo nueva en Google Sheets → Extensiones → Apps Script → pega este archivo.
- *  2. Cambia CLIENT_ID (abajo) por el ID de cliente de Google que creaste.
- *  3. Ejecuta la función «instalar» una vez (acepta los permisos).
- *  4. Implementar → Nueva implementación → Aplicación web → Ejecutar como: Yo · Quién tiene acceso: Cualquier usuario.
- *  5. Copia la URL que termina en /exec y pégala en la página.
- */
-const CLIENT_ID = 'PEGAR_AQUI_EL_CLIENT_ID.apps.googleusercontent.com';
-const TZ = 'America/Guayaquil';
-const H = { BASE: 'BASE_CLIENTES', CAR: 'CARTERA', PED: 'PEDIDOS', USU: 'USUARIOS', LOG: 'BITACORA', CFG: 'CONFIG' };
-const COLS_BASE = ['RUC', 'RAZON SOCIAL', 'NOMBRE COMERCIAL', 'VENDEDOR', 'TARIFA', 'CUPO CREDITO', 'DIAS CREDITO', 'SALDO'];
-const COLS_CAR = ['cliente', 'vence', 'saldovencido', 'saldototal'];
-const COLS_PED = ['id', 'fecha_control', 'no_interno', 'fecha', 'cliente', 'factura', 'total', 'resultado', 'dias_vencidos', 'observacion_cupo', 'accion', 'responsable', 'observaciones', 'registrado_por', 'registrado_el', 'actualizado_por', 'actualizado_el', 'estado'];
-const COLS_USU = ['correo', 'nombre', 'rol', 'activo'];
-const COLS_LOG = ['fecha_hora', 'usuario', 'rol', 'accion', 'detalle'];
-const NIVEL = { CONSULTA: 1, VALIDADOR: 2, ADMIN: 3 };
-const PERMISO = { me: 'CONSULTA', bases: 'CONSULTA', pedidos: 'CONSULTA', bitacora: 'VALIDADOR', addPedidos: 'VALIDADOR', updatePedido: 'VALIDADOR', deletePedido: 'ADMIN', setBase: 'ADMIN', setCartera: 'ADMIN', setConfig: 'ADMIN' };
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LUBAMAQUI · Validación de cupo (en línea)</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap">
+<style>
+:root{--bg:#f6f3ee;--card:#fffdf9;--ink:#1d2b2a;--muted:#6a7673;--line:#e4dfd5;--accent:#0f766e;--amber:#d97706;--soft:#f0ebe1;--good:#0f7a4e;--bad:#b42318;--warn:#8a5a00;--warnbg:#fff1d0;--badbg:#fde7e4;--okbg:#dff3e8;--side:#0c3b39;--sidetx:#e8f1ef;--sidemu:#8fb5b0;--shadow:0 1px 2px rgba(29,43,42,.06)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#101a19;--card:#172423;--ink:#e6efed;--muted:#92a8a4;--line:#2a3b39;--accent:#3cc1b5;--amber:#f0a53a;--soft:#1d2d2b;--good:#5cc890;--bad:#ff8f86;--warn:#f0c15a;--warnbg:#3a2f12;--badbg:#3d1f1c;--okbg:#14301f;--side:#0a2524;--shadow:none;color-scheme:dark}}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 "DM Sans","Segoe UI",Arial,sans-serif;margin:0}
+.shell{display:grid;grid-template-columns:232px minmax(0,1fr);min-height:100vh}
+.side{background:var(--side);color:var(--sidetx);padding:22px 14px;display:flex;flex-direction:column;gap:22px;position:sticky;top:0;height:100vh}
+.brand{display:flex;flex-direction:column;gap:2px;padding:0 8px}
+.mark{font-family:"Space Grotesk",sans-serif;font-weight:700;font-size:21px;letter-spacing:.14em}
+.tag{font-size:12px;color:var(--sidemu)}
+.nav{display:flex;flex-direction:column;gap:4px}
+.pill2{font:500 14px "DM Sans",sans-serif;color:var(--sidetx);background:transparent;border:0;border-left:3px solid transparent;border-radius:4px;padding:10px 12px;cursor:pointer;text-align:left}
+.pill2:hover{background:rgba(255,255,255,.06)}
+.pill2.on{background:rgba(255,255,255,.1);border-left-color:var(--amber);font-weight:700}
+.st{margin-top:auto;font-size:12px;color:var(--sidemu);padding:0 8px;display:flex;gap:8px;align-items:flex-start}.st:before{content:"";flex:none;margin-top:5px;width:8px;height:8px;border-radius:50%;background:#4ade80}
+.gut{padding-left:max(18px,env(safe-area-inset-left,0px));padding-right:max(18px,env(safe-area-inset-right,0px))}
+.wrap{max-width:1180px;margin:0 auto;padding-block:28px 56px;display:flex;flex-direction:column;gap:16px}
+h1{font-family:"Space Grotesk",sans-serif;font-size:26px;font-weight:700;margin:0;line-height:1.15;letter-spacing:-.01em}
+h2{font-family:"Space Grotesk",sans-serif;font-size:17px;font-weight:700;margin:0 0 8px}
+.sub{color:var(--muted);font-size:12.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;box-shadow:var(--shadow);min-width:0}
+.card.red{border-top:4px solid var(--accent)}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+label.f{display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--muted);font-weight:600}
+select,input,textarea{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0}
+select:focus,input:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:1px}
+textarea{width:100%;min-height:110px;font:12px/1.4 ui-monospace,Consolas,monospace;margin-top:10px}
+.btn{font:600 13px "DM Sans",sans-serif;background:var(--accent);color:#fff;border:0;border-radius:8px;padding:10px 18px;cursor:pointer}
+.btn.green{background:var(--amber);color:#1b1305}.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}.btn.sm{padding:6px 11px;font-size:12px}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.hint{color:var(--muted);font-size:12.5px;margin:6px 0}
+.note{background:var(--warnbg);color:var(--warn);border-radius:8px;padding:8px 12px;font-size:12.5px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px}
+.stat b{display:block;font-family:"Space Grotesk",sans-serif;font-size:30px;line-height:1.15;font-weight:700}.stat span{font-size:12px;color:var(--muted)}
+.stat.g b{color:var(--good)}.stat.r b{color:var(--bad)}.stat.w b{color:var(--warn)}
+.scroll{overflow-x:auto;max-width:100%}
+table.t{border-collapse:collapse;width:100%;font-size:12.5px}
+.t th{color:var(--muted);text-align:left;font-weight:700;font-size:11px;padding:8px 6px;white-space:nowrap;border-bottom:2px solid var(--accent)}
+.t td{padding:7px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+.t tbody tr:hover{background:var(--soft)}
+.t td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.pill{font-size:11px;padding:2px 10px;border-radius:6px;font-weight:700;white-space:nowrap}.pill.ok{background:var(--okbg);color:var(--good)}.pill.no{background:var(--badbg);color:var(--bad)}
+.obs{font-size:12px}.obs.ins{color:var(--bad)}.obs.nf{color:var(--warn);font-weight:600}
+.t input,.t select{padding:4px 6px;font-size:12px;width:100%}
+.t td:nth-child(4){min-width:190px}.t td.obs{min-width:260px}.t td select{min-width:120px}.t td.r input{min-width:110px}.t td.o input{min-width:150px}
+.pager{display:flex;gap:8px;align-items:center;margin-top:10px;font-size:12.5px;color:var(--muted)}
+.x{background:none;border:0;color:var(--muted);cursor:pointer;font-size:15px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.ok-t{color:var(--good);font-weight:600}.bad-t{color:var(--bad);font-weight:600}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:13px;max-width:min(560px,calc(100vw - 32px));opacity:0;pointer-events:none;transition:opacity .2s;z-index:20}
+.toast.show{opacity:1}.toast.bad{background:var(--bad);color:#fff}
+ul.h{margin:6px 0;padding-left:20px}ul.h li{margin:4px 0}
+@media(max-width:820px){.shell{grid-template-columns:1fr}.side{position:static;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:12px max(16px,env(safe-area-inset-left,0px))}.nav{flex-direction:row;flex-wrap:wrap}.pill2{border-left:0;border-bottom:3px solid transparent;padding:6px 10px}.pill2.on{border-bottom-color:var(--amber)}.st{margin-top:0}.brand{flex-direction:row;align-items:baseline;gap:10px}}
+:root,:root:not([data-theme="light"]){--bg:#f3f4f6;--card:#fff;--ink:#111418;--muted:#656d79;--line:#e1e4e9;--accent:#1d4ed8;--amber:#c8102e;--red:#c8102e;--soft:#eef1f7;--good:#0f7a4e;--bad:#c8102e;--warn:#8a5a00;--warnbg:#fff1d0;--badbg:#fde7ea;--okbg:#dff3e8;--side:#0f2a4a;--sidetx:#f1f5fa;--sidemu:#a9bcd3;--shadow:0 1px 2px rgba(17,20,24,.07);color-scheme:light}
+.side{border-right:4px solid var(--red)}
+.logo{height:38px;width:auto;display:block;background:#fff;border-radius:8px;padding:8px 10px;box-sizing:content-box;max-width:100%}
+.tag{font-size:12px;color:var(--sidemu);margin-top:6px}
+.pill2:hover{background:rgba(255,255,255,.07)}.pill2.on{background:rgba(255,255,255,.1);border-left-color:var(--red);font-weight:700}
+.btn{background:var(--accent)}.btn.green{background:var(--ink);color:#fff}
+.card.red{border-top:4px solid var(--red)}
+.t th{border-bottom:2px solid var(--accent)}
+.stat{border-top:3px solid var(--ink)}.stat.g{border-top-color:var(--good)}.stat.r{border-top-color:var(--red)}.stat.w{border-top-color:var(--accent)}
+.stat.w b{color:var(--accent)}.obs.ins{color:var(--red)}.obs.nf{color:var(--accent)}
+.pill.no{background:#fde7ea;color:var(--red)}.st:before{background:#22c55e}
+select:focus,input:focus,textarea:focus{outline:2px solid var(--accent)}
+@media(max-width:820px){.side{border-right:0;border-bottom:4px solid var(--red)}.logo{height:30px}.tag{display:none}.pill2.on{border-bottom-color:var(--red)}}
 
-/* ---------- instalación (se ejecuta una sola vez a mano) ---------- */
-function instalar() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const def = (nombre, cols, anchoTexto) => {
-    let sh = ss.getSheetByName(nombre) || ss.insertSheet(nombre);
-    sh.getRange(1, 1, 1, cols.length).setValues([cols]).setFontWeight('bold').setBackground('#0f2a4a').setFontColor('#ffffff');
-    sh.setFrozenRows(1); return sh;
-  };
-  const b = def(H.BASE, COLS_BASE); b.getRange('A:E').setNumberFormat('@'); b.getRange('F:H').setNumberFormat('0.00');
-  const c = def(H.CAR, COLS_CAR); c.getRange('A:B').setNumberFormat('@');
-  const p = def(H.PED, COLS_PED); p.getRange('A:F').setNumberFormat('@'); p.getRange('H:R').setNumberFormat('@');
-  def(H.LOG, COLS_LOG).getRange('A:E').setNumberFormat('@');
-  const u = def(H.USU, COLS_USU);
-  def(H.CFG, ['clave', 'valor']);
-  const yo = (Session.getActiveUser().getEmail() || '').toLowerCase();
-  if (u.getLastRow() < 2 && yo) u.getRange(2, 1, 1, 4).setValues([[yo, 'Administrador', 'ADMIN', 'SI']]);
-  if (!cfgGet('umbral')) cfgSet('umbral', '61');
-  if (!cfgGet('pedV')) cfgSet('pedV', String(Date.now()));
-  const sobrante = ss.getSheetByName('Hoja 1') || ss.getSheetByName('Sheet1'); if (sobrante && ss.getSheets().length > 1) ss.deleteSheet(sobrante);
-  return 'Listo. Agrega los correos de tus auxiliares en la hoja USUARIOS (rol: ADMIN, VALIDADOR o CONSULTA).';
-}
+[hidden]{display:none!important}
+.ov{position:fixed;inset:0;background:rgba(15,42,74,.92);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px}
+.ov .box{background:var(--card);border-radius:12px;padding:28px;max-width:420px;width:100%;text-align:center;display:flex;flex-direction:column;gap:14px;align-items:center}
+.ov .box .logo{height:44px;background:none;padding:0}
+.ov p{margin:0;color:var(--muted);font-size:13px}
+.who{font-size:12.5px;color:var(--sidemu);padding:0 8px;display:flex;flex-direction:column;gap:6px}
+.who b{color:var(--sidetx);font-size:13.5px;overflow-wrap:anywhere}
+.badge{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.06em;border-radius:5px;padding:1px 7px;background:var(--red);color:#fff;margin-left:6px}
+.who .lk{background:none;border:0;color:var(--sidetx);text-decoration:underline;cursor:pointer;font:inherit;padding:0;text-align:left}
+.reg{font-size:11px;color:var(--muted);white-space:nowrap}
+.adm[hidden]{display:none}
+</style></head><body>
+<div class="shell">
+<aside class="side"><div class="brand"><img class="logo" alt="LUBAMAQUI Grupo Empresarial" src="data:image/png;base64,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"><span class="tag">Validación de cupo y pedidos</span></div>
+<nav class="nav"><button class="pill2 on" data-v="ped">Pedidos</button><button class="pill2" data-v="bases">Bases de datos</button><button class="pill2" data-v="log" id="nav-log" hidden>Bitácora</button><button class="pill2" data-v="ayuda">Ayuda</button></nav>
+<div class="who" id="who"></div><div class="st" id="stbar">Cargando…</div></aside>
+<main class="gut"><div class="wrap">
+<div id="err" class="note" hidden></div>
 
-/* ---------- punto de entrada ---------- */
-function doGet() { return salida({ ok: true, servicio: 'validacion-cupo' }); }
-function doPost(e) {
-  let req;
-  try { req = JSON.parse(e.postData.contents); } catch (err) { return salida({ ok: false, error: 'JSON', mensaje: 'Solicitud inválida' }); }
-  try {
-    const u = autenticar(req.token);
-    const minimo = PERMISO[req.action]; if (!minimo) throw falla('ACCION', 'Acción desconocida');
-    if (NIVEL[u.rol] < NIVEL[minimo]) throw falla('SIN_PERMISO', 'Tu rol (' + u.rol + ') no permite esta acción.');
-    const r = ACCIONES[req.action](req, u);
-    return salida(Object.assign({ ok: true }, r));
-  } catch (err) { return salida({ ok: false, error: err.codigo || 'ERROR', mensaje: String(err.message || err), correo: err.correo }); }
-}
-const salida = o => ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
-const falla = (codigo, mensaje, extra) => { const e = new Error(mensaje); e.codigo = codigo; if (extra) Object.assign(e, extra); return e; };
+<div id="v-ped">
+  <section class="card red" id="addcard"><h2>Registrar nuevos pedidos</h2>
+    <div class="row"><label class="f">Fecha de control<input type="date" id="fc"></label><button class="btn" id="add">+ Validar y agregar</button></div>
+    <textarea id="paste" placeholder="Pega aquí las columnas C a G de tu hoja (una fila por pedido):&#10;No. Interno   fecha   cliente   factura   total&#10;P000020454   12/10/2026   ROMERO DELGADO JOSEFA LILIANA   002-001-000094388   540,10"></textarea>
+    <div class="hint" id="addmsg"></div>
+  </section>
+  <div id="warn" style="margin-top:16px"></div>
+  <div class="stats" id="stats" style="margin-top:16px"></div>
+  <section class="card" style="margin-top:16px">
+    <div class="row" style="justify-content:space-between;margin-bottom:10px"><h2 id="ttl" style="margin:0">Pedidos registrados</h2>
+      <div class="row"><label class="f">Fecha control<select id="ffc"></select></label><label class="f">Resultado<select id="fres"><option value="">Todos</option><option>APROBADO</option><option>NO APROBADO</option></select></label><label class="f">Acción<select id="facc"><option value="">Todas</option><option>PENDIENTE</option><option>SOLUCIONADO</option><option value="-">Sin acción</option></select></label><label class="f">Buscar<input id="fq" placeholder="cliente, N° interno, factura"></label><button class="btn green" id="xls">Descargar Excel</button></div></div>
+    <div class="scroll"><table class="t"><thead><tr><th>F. control</th><th>N° interno</th><th>Fecha</th><th>Cliente</th><th>Factura</th><th style="text-align:right">Total</th><th>Resultado</th><th>Días venc.</th><th>Observación de cupo</th><th>Acción</th><th>Responsable</th><th>Observaciones</th><th>Registró</th><th></th></tr></thead><tbody id="tb"></tbody></table></div>
+    <div class="pager"><button class="btn ghost sm" id="pp">‹</button><span id="pg"></span><button class="btn ghost sm" id="pn">›</button></div>
+  </section>
+</div>
 
-/* ---------- identidad: token de Google verificado en el servidor ---------- */
-function autenticar(token) {
-  if (!token) throw falla('TOKEN', 'Inicia sesión con Google.');
-  const cache = CacheService.getScriptCache();
-  const dig = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, token).map(b => ('0' + (b & 255).toString(16)).slice(-2)).join('');
-  let correo = cache.get('tk' + dig);
-  if (!correo) {
-    const r = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(token), { muteHttpExceptions: true });
-    if (r.getResponseCode() !== 200) throw falla('TOKEN', 'La sesión de Google venció. Vuelve a ingresar.');
-    const t = JSON.parse(r.getContentText());
-    if (t.aud !== CLIENT_ID) throw falla('TOKEN', 'El token no corresponde a esta aplicación.');
-    if (String(t.email_verified) !== 'true') throw falla('TOKEN', 'Correo no verificado.');
-    const resta = Number(t.exp) - Math.floor(Date.now() / 1000); if (resta < 30) throw falla('TOKEN', 'La sesión de Google venció. Vuelve a ingresar.');
-    correo = String(t.email).toLowerCase(); cache.put('tk' + dig, correo, Math.min(resta - 20, 3000));
+<div id="v-bases" hidden>
+  <h1>Bases de datos</h1><div class="sub">Las bases están en línea: al actualizarlas aquí, todos los usuarios ven la misma información.</div><div class="grid" style="margin-top:14px"><section class="card"><h2>Estado en línea</h2><div class="hint" id="s-base"></div><div class="hint" id="s-car"></div></section></div>
+  <div class="note adm" id="noadm" hidden style="margin-top:14px">Solo el administrador puede actualizar las bases. Aquí ves cuándo se actualizaron por última vez.</div>
+  <div class="grid" style="margin-top:14px">
+    <section class="card red adm"><h2>Archivo completo</h2><div class="hint">El Excel con las hojas BASE CLIENTES, CARTERA y (opcional) PEDIDOS, como tu hoja de Google descargada en .xlsx.</div><input type="file" id="f-all" accept=".xlsx"><label class="hint" style="display:block"><input type="checkbox" id="imp-ped"> Importar también los pedidos de la hoja PEDIDOS</label></section>
+    <section class="card adm"><h2>Solo base de clientes</h2><div class="hint">RUC, razón social, nombre comercial, vendedor, tarifa, cupo, días de crédito y saldo.</div><input type="file" id="f-base" accept=".xlsx"></section>
+    <section class="card adm"><h2>Solo cartera</h2><div class="hint">Exportación de cartera de Perseo (cliente, ruc, vence, saldovencido…).</div><input type="file" id="f-car" accept=".xlsx"></section>
+  </div>
+  <section class="card" style="margin-top:14px"><h2>Regla de días vencidos</h2><div class="hint">Un cliente con una factura vencida de estos días o más queda NO APROBADO hasta que la acción sea SOLUCIONADO.</div><label class="f">Días vencidos<input type="number" id="umbral" min="1" value="61" style="width:110px"></label></section>
+  
+</div>
+
+<div id="v-log" hidden>
+  <h1>Bitácora</h1><div class="sub">Registro de quién hizo qué y cuándo. No se puede editar desde la página.</div>
+  <section class="card" style="margin-top:14px"><div class="scroll"><table class="t"><thead><tr><th>Fecha y hora</th><th>Usuario</th><th>Rol</th><th>Acción</th><th>Detalle</th></tr></thead><tbody id="logb"></tbody></table></div></section>
+</div>
+
+<div id="v-ayuda" hidden>
+  <h1>Cómo funciona</h1>
+  <section class="card" style="margin-top:14px">
+    <ul class="h">
+      <li><b>Cupo disponible</b> = cupo de crédito − saldo, tomados de la base de clientes. El cliente se busca por razón social y, si no está, por nombre comercial.</li>
+      <li><b>Total pedidos</b> = suma de los pedidos del mismo cliente con la misma fecha de control. Si supera el cupo disponible: «CUPO INSUFICIENTE» y se muestra lo que falta.</li>
+      <li><b>Días vencidos</b>: de la cartera, antigüedad de la factura vencida más antigua del cliente. Solo se muestra si son <b class="u">61</b> días o más. Si falta alguna fecha de vencimiento: «VERIFICAR FECHA DE VENCIMIENTO».</li>
+      <li><b>Resultado</b>: APROBADO si hay cupo y no hay vencidos de <b class="u">61</b> días o más. Si hay cupo insuficiente o vencidos, queda NO APROBADO hasta que la acción sea SOLUCIONADO. Si el cliente no está en la base, siempre NO APROBADO.</li>
+      <li>Los totales con coma decimal (por ejemplo «351,64») se suman como números; la hoja de Google no los suma cuando llegan como texto.</li>
+      <li><b>Usuarios y roles:</b> se entra con la cuenta de Google. El administrador actualiza las bases, el validador registra y edita pedidos, y la consulta solo ve. Cada cambio queda en la bitácora con el correo de quien lo hizo.</li>
+      <li>Los datos están en línea: lo que registra una persona lo ve el resto al actualizar (la página se refresca sola cada minuto y medio).</li>
+    </ul>
+  </section>
+</div>
+</div>
+</div></main></div>
+<div class="ov" id="login"><div class="box"><img class="logo" alt="LUBAMAQUI" src="data:image/png;base64,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"><h2 style="margin:0">Validación de cupo y pedidos</h2><p id="lmsg">Cargando acceso con Google…</p><div id="gbtn"></div></div></div>
+<div class="toast" id="toast" role="status"></div>
+<script>window.LUBAMAQUI_CFG={   "API_URL": "PEGAR_AQUI_LA_URL_DE_APPS_SCRIPT",   "CLIENT_ID": "PEGAR_AQUI_EL_CLIENT_ID.apps.googleusercontent.com" };</script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script>/* ===== Núcleo: validación de cupo y pedidos (sin DOM). Replica la hoja VALIDACION_CUPO_PEDIDOS ===== */
+const Cupo = (() => {
+  const norm = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toUpperCase();
+  const val = v => { if (v == null) return null; if (typeof v === 'object') { if (v instanceof Date) return v; if ('result' in v) return val(v.result); if (v.richText) return v.richText.map(t => t.text).join(''); if ('text' in v) return v.text; if ('error' in v) return null; } return v; };
+  const num = v => { v = val(v); if (v == null || v === '') return 0; if (v instanceof Date) return Math.floor(v.getTime() / 86400000) + 25569; if (typeof v === 'number') return v; let s = String(v).trim().replace(/[$\s]/g, ''); if (!s) return 0; const lc = s.lastIndexOf(','), ld = s.lastIndexOf('.'); if (lc >= 0 && ld >= 0) { s = lc > ld ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, ''); } else if (lc >= 0) { s = (s.match(/,/g) || []).length > 1 ? s.replace(/,/g, '') : s.replace(',', '.'); } const n = parseFloat(s); return isNaN(n) ? 0 : n; };
+  const day = d => Math.floor(d.getTime() / 86400000);                       // fecha UTC (Excel) → n° de día
+  const todayN = () => { const t = new Date(); return Math.floor(Date.UTC(t.getFullYear(), t.getMonth(), t.getDate()) / 86400000); };
+  const dayOf = v => { v = val(v); if (v == null || v === '') return null; if (v instanceof Date) return day(v); if (typeof v === 'number') return v > 20000 ? Math.floor(v - 25569) : null;
+    const s = String(v).trim(); let m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/); if (m) { let y = +m[3]; if (y < 100) y += 2000; return Math.floor(Date.UTC(y, +m[2] - 1, +m[1]) / 86400000); }
+    m = s.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/); if (m) return Math.floor(Date.UTC(+m[1], +m[2] - 1, +m[3]) / 86400000); return null; };
+  const fmtD = n => { if (n == null) return ''; const d = new Date(n * 86400000); return String(d.getUTCDate()).padStart(2, '0') + '/' + String(d.getUTCMonth() + 1).padStart(2, '0') + '/' + d.getUTCFullYear(); };
+  const isoD = n => new Date(n * 86400000).toISOString().slice(0, 10);
+  const money = v => '$' + v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const r2 = x => Math.round(x * 100) / 100;
+
+  /* ---- lectura de hojas (filas = arrays 0-based) ---- */
+  const hdr = (rows, pred, max) => { for (let i = 0; i < Math.min(rows.length, max || 15); i++) { const h = Array.from(rows[i] || [], c => norm(val(c)).toLowerCase()); if (pred(h)) return { i, h }; } return null; };
+  const col = (h, test) => h.findIndex(test);
+  function parseBase(rows) {
+    const f = hdr(rows, h => h.some(x => x.startsWith('razon')) && h.some(x => x.startsWith('cupo'))); if (!f) throw new Error('No encontré las columnas RAZON SOCIAL y CUPO CREDITO de la base de clientes.');
+    const h = f.h, c = { ruc: col(h, x => x === 'ruc'), rs: col(h, x => x.startsWith('razon')), nc: col(h, x => x.startsWith('nombre')), ven: col(h, x => x === 'vendedor'), tar: col(h, x => x === 'tarifa'), cupo: col(h, x => x.startsWith('cupo') && !x.includes('aux')), dias: col(h, x => x.startsWith('dias')), saldo: col(h, x => x === 'saldo') };
+    if (c.saldo < 0) throw new Error('No encontré la columna SALDO en la base de clientes.');
+    const out = []; for (let i = f.i + 1; i < rows.length; i++) { const r = rows[i] || []; const rs = norm(val(r[c.rs])), nc = c.nc >= 0 ? norm(val(r[c.nc])) : ''; if (!rs && !nc) continue; out.push([String(val(r[c.ruc]) == null ? '' : val(r[c.ruc])).trim(), rs, nc, c.ven >= 0 ? norm(val(r[c.ven])) : '', c.tar >= 0 ? norm(val(r[c.tar])) : '', num(r[c.cupo]), c.dias >= 0 ? num(r[c.dias]) : 0, num(r[c.saldo])]); }
+    return out;
   }
-  const filas = hoja(H.USU).getRange(2, 1, Math.max(1, hoja(H.USU).getLastRow() - 1), 4).getValues();
-  const f = filas.find(x => String(x[0]).trim().toLowerCase() === correo);
-  if (!f || String(f[3]).trim().toUpperCase() === 'NO') throw falla('NO_AUTORIZADO', 'Tu correo (' + correo + ') no está autorizado. Pide al administrador que lo agregue.', { correo });
-  const rol = String(f[2]).trim().toUpperCase(); if (!NIVEL[rol]) throw falla('NO_AUTORIZADO', 'Rol inválido en USUARIOS para ' + correo, { correo });
-  return { correo, nombre: String(f[1] || correo), rol };
-}
+  function parseCartera(rows) {
+    const f = hdr(rows, h => h.includes('cliente') && h.includes('saldovencido')); if (!f) throw new Error('No encontré las columnas cliente y saldovencido de la cartera.');
+    const h = f.h, c = { cli: h.indexOf('cliente'), ruc: h.indexOf('ruc'), vence: h.indexOf('vence'), sv: h.indexOf('saldovencido'), st: h.indexOf('saldototal') };
+    const out = []; for (let i = f.i + 1; i < rows.length; i++) { const r = rows[i] || []; const cli = norm(val(r[c.cli])); if (!cli) continue; out.push([cli, dayOf(r[c.vence]), num(r[c.sv]), c.st >= 0 ? num(r[c.st]) : 0]); }
+    return out;
+  }
+  const PH = { fc: 'fecha control', no: 'no. interno', fe: 'fecha', cli: 'cliente', fa: 'factura', to: 'total', obs: 'observaciones', resp: 'responsable', acc: 'accion' };
+  function parsePedidosSheet(rows) {
+    const f = hdr(rows, h => h.includes('no. interno') && h.includes('cliente')); if (!f) return [];
+    const h = f.h.map(x => x.replace('acción', 'accion')); const ix = {}; for (const k in PH) ix[k] = h.indexOf(PH[k]);
+    const out = []; for (let i = f.i + 1; i < rows.length; i++) { const r = rows[i] || []; const cli = norm(val(r[ix.cli])); if (!cli) continue; out.push({ fc: dayOf(r[ix.fc]), no: String(val(r[ix.no]) == null ? '' : val(r[ix.no])).trim(), fe: dayOf(r[ix.fe]), cli, fa: String(val(r[ix.fa]) == null ? '' : val(r[ix.fa])).trim(), to: num(r[ix.to]), obs: ix.obs >= 0 ? String(val(r[ix.obs]) || '') : '', resp: ix.resp >= 0 ? String(val(r[ix.resp]) || '') : '', acc: ix.acc >= 0 ? String(val(r[ix.acc]) || '').toUpperCase() : '' }); }
+    return out;
+  }
+  /* texto pegado desde Sheets/Excel: No. Interno, fecha, cliente, factura, total */
+  function parsePaste(text, fc) {
+    const out = [], bad = [];
+    for (const line of String(text).split(/\r?\n/)) { if (!line.trim()) continue; const p = line.split('\t').map(s => s.trim()); if (p.length < 5) { bad.push(line); continue; }
+      if (/^no\.?\s*interno$/i.test(p[0])) continue;
+      const to = num(p[4]), cli = norm(p[2]); if (!cli) { bad.push(line); continue; }
+      out.push({ fc, no: p[0], fe: dayOf(p[1]), cli, fa: p[3], to, obs: '', resp: '', acc: 'PENDIENTE' }); }
+    return { out, bad };
+  }
 
-/* ---------- utilidades de hoja ---------- */
-const hoja = n => { const s = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(n); if (!s) throw falla('INSTALAR', 'Falta la hoja ' + n + '. Ejecuta «instalar».'); return s; };
-function asegurar(s, filas) { const falta = filas - s.getMaxRows(); if (falta > 0) s.insertRowsAfter(s.getMaxRows(), falta + 500); }
-const ahora = () => Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm:ss');
-function cfgAll() { const s = hoja(H.CFG), n = s.getLastRow(); const o = {}; if (n >= 2) s.getRange(2, 1, n - 1, 2).getValues().forEach(r => { o[r[0]] = String(r[1]); }); return o; }
-function cfgGet(k) { return cfgAll()[k]; }
-function cfgSet(k, v) { const s = hoja(H.CFG), n = s.getLastRow(); if (n >= 2) { const ks = s.getRange(2, 1, n - 1, 1).getValues(); for (let i = 0; i < ks.length; i++) if (ks[i][0] === k) { s.getRange(i + 2, 2).setValue(String(v)); return; } } asegurar(s, n + 1); s.getRange(n + 1, 1, 1, 2).setValues([[k, String(v)]]); }
-function registrar(u, accion, detalle) { const s = hoja(H.LOG); asegurar(s, s.getLastRow() + 1); s.getRange(s.getLastRow() + 1, 1, 1, 5).setValues([[ahora(), u.correo, u.rol, accion, String(detalle).slice(0, 4000)]]); }
-function bloqueado(fn) { const l = LockService.getScriptLock(); l.waitLock(25000); try { return fn(); } finally { l.releaseLock(); } }
-const tocarPed = () => cfgSet('pedV', String(Date.now()));
-
-/* ---------- acciones ---------- */
-const ACCIONES = {
-  me(req, u) { const c = cfgAll(); return { usuario: u, umbral: Number(c.umbral || 61), versiones: ver(c) }; },
-
-  bases(req) {
-    const c = cfgAll(), v = ver(c);
-    if (req.baseV && req.carV && String(req.baseV) === v.baseV && String(req.carV) === v.carV) return { sinCambios: true, versiones: v };
-    const sb = hoja(H.BASE), sc = hoja(H.CAR), nb = sb.getLastRow(), nc = sc.getLastRow();
-    return { versiones: v, base: nb >= 2 ? sb.getRange(2, 1, nb - 1, 8).getValues() : [], car: nc >= 2 ? sc.getRange(2, 1, nc - 1, 4).getValues() : [], meta: { baseAt: c.baseAt, baseBy: c.baseBy, carAt: c.carAt, carBy: c.carBy }, umbral: Number(c.umbral || 61) };
-  },
-
-  pedidos(req) {
-    const c = cfgAll(); if (req.pedV && String(req.pedV) === c.pedV) return { sinCambios: true, pedV: c.pedV };
-    const s = hoja(H.PED), n = s.getLastRow(); const desde = req.desde || Utilities.formatDate(new Date(Date.now() - 120 * 86400000), TZ, 'yyyy-MM-dd');
-    const f = n >= 2 ? s.getRange(2, 1, n - 1, 18).getValues() : [];
-    const items = f.filter(r => r[17] !== 'ELIMINADO' && String(r[1]) >= desde).map(r => [r[0], r[1], r[2], r[3], r[4], r[5], Number(r[6]) || 0, r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15], r[16]]);
-    return { pedV: c.pedV, items, desde };
-  },
-
-  addPedidos(req, u) {
-    const items = req.items || []; if (!items.length) return { agregados: 0, repetidos: 0 };
-    return bloqueado(() => {
-      const s = hoja(H.PED), n = s.getLastRow(); const existentes = new Set();
-      if (n >= 2) s.getRange(2, 1, n - 1, 18).getValues().forEach(r => { if (r[17] !== 'ELIMINADO' && r[2]) existentes.add(String(r[2])); });
-      const filas = []; let rep = 0; const t = ahora();
-      items.forEach((p, i) => { const no = String(p.no || '').trim(); if (no && existentes.has(no)) { rep++; return; } if (no) existentes.add(no);
-        const r = p.res || {}; filas.push([Utilities.getUuid().slice(0, 8) + i, p.fc || '', no, p.fe || '', String(p.cli || '').toUpperCase(), String(p.fa || ''), Number(p.to) || 0, r.H || '', r.I === '' || r.I == null ? '' : String(r.I), r.J || '', p.acc || 'PENDIENTE', p.resp || '', p.obs || '', req.importar ? 'IMPORTADO' : u.correo, req.importar ? '' : t, '', '', 'ACTIVO']); });
-      if (filas.length) { asegurar(s, n + filas.length); s.getRange(n + 1, 1, filas.length, 18).setValues(filas); }
-      registrar(u, req.importar ? 'IMPORTAR_PEDIDOS' : 'AGREGAR_PEDIDOS', filas.length + ' pedidos (' + rep + ' repetidos omitidos). Fecha control: ' + (items[0].fc || '') + '. N°: ' + filas.slice(0, 40).map(r => r[2]).join(', '));
-      if (filas.length) tocarPed();
-      return { agregados: filas.length, repetidos: rep };
+  /* ---- índices y evaluación ---- */
+  function indexBase(rows) { const rs = new Map(), nc = new Map(); rows.forEach((r, i) => { if (r[1] && !rs.has(r[1])) rs.set(r[1], i); if (r[2] && !nc.has(r[2])) nc.set(r[2], i); }); return { rows, rs, nc }; }
+  function indexCartera(rows) { const m = new Map(); for (const [cli, vence, sv] of rows) { if (!(sv > 0)) continue; let e = m.get(cli); if (!e) m.set(cli, e = { n: 0, v: [] }); e.n++; if (vence != null && vence > 0) e.v.push(vence); } return m; }
+  function evaluate(peds, B, C, today, umbral) {
+    umbral = umbral || 61;
+    const sums = new Map(); for (const p of peds) { if (p.fc == null) continue; const k = p.cli + '|' + p.fc; sums.set(k, (sums.get(k) || 0) + p.to); }
+    return peds.map(p => {
+      const idx = B.rs.has(p.cli) ? B.rs.get(p.cli) : (B.nc.has(p.cli) ? B.nc.get(p.cli) : null); const found = idx != null;
+      const row = found ? B.rows[idx] : null; const Q = found ? r2(row[5] - row[7]) : null; const P = p.fc != null ? r2(sums.get(p.cli + '|' + p.fc)) : null;
+      let J; if (!p.cli) J = ''; else if (!found) J = 'CLIENTE NO ENCONTRADO EN BASE'; else if (Q == null) J = 'VERIFICAR CUPO EN BASE'; else if (p.fc == null) J = 'INGRESAR FECHA CONTROL';
+      else if (P <= Q) J = 'CUPO SUFICIENTE | Total pedidos: ' + money(P) + ' | Cupo disponible: ' + money(Q); else J = 'CUPO INSUFICIENTE | Total pedidos: ' + money(P) + ' | Cupo disponible: ' + money(Q) + ' | Falta: ' + money(r2(P - Q));
+      let I = ''; const e = C.get(p.cli);
+      if (e && e.n > 0) { const ok = e.v.filter(d => d > 0 && d <= today); if (ok.length < e.n) I = 'VERIFICAR FECHA DE VENCIMIENTO'; else { const d = today - Math.min(...ok); I = d >= umbral ? d : ''; } }
+      let H; if (!found || Q == null || p.fc == null) H = 'NO APROBADO'; else if (J.includes('CUPO INSUFICIENTE') || I !== '') H = String(p.acc || '').trim().toUpperCase() === 'SOLUCIONADO' ? 'APROBADO' : 'NO APROBADO'; else H = 'APROBADO';
+      return { found, ruc: found ? row[0] : '', ven: found ? row[3] : '', cupo: found ? row[5] : null, saldo: found ? row[7] : null, Q, P, J, I, H, insuf: J.includes('CUPO INSUFICIENTE') };
     });
-  },
+  }
+  return { norm, val, num, dayOf, fmtD, isoD, todayN, money, r2, parseBase, parseCartera, parsePedidosSheet, parsePaste, indexBase, indexCartera, evaluate };
+})();
+if (typeof module !== 'undefined') module.exports = Cupo;
+</script>
+<script>(() => {
+  const CFG = window.LUBAMAQUI_CFG || {};
+  const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const f2 = v => v == null ? '' : v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const NIVEL = { CONSULTA: 1, VALIDADOR: 2, ADMIN: 3 };
+  let user = null, token = null, tokenExp = 0, waitCred = null, started = false;
+  let base = [], car = [], peds = [], meta = { umbral: 61, v: {}, info: {} }, B = null, C = null, EV = [], today = Cupo.todayN(), page = 0, view = [];
+  const PER = 100;
+  const can = r => !!user && NIVEL[user.rol] >= NIVEL[r];
+  let tt; const toast = (t, bad) => { const e = $('#toast'); e.textContent = t; e.className = 'toast show' + (bad ? ' bad' : ''); clearTimeout(tt); tt = setTimeout(() => e.className = 'toast', 5600); };
+  const setSt = t => { $('#stbar').textContent = t; };
 
-  updatePedido(req, u) {
-    const campos = { acc: 11, resp: 12, obs: 13 }, col = campos[req.campo]; if (!col) throw falla('CAMPO', 'Campo no editable');
-    let val = String(req.valor == null ? '' : req.valor); if (req.campo === 'acc' && ['', 'PENDIENTE', 'SOLUCIONADO'].indexOf(val) < 0) throw falla('VALOR', 'Acción inválida');
-    return bloqueado(() => {
-      const s = hoja(H.PED), n = s.getLastRow(), ids = s.getRange(2, 1, Math.max(1, n - 1), 1).getValues(); const i = ids.findIndex(x => x[0] === req.id); if (i < 0) throw falla('NO_EXISTE', 'El pedido ya no existe.');
-      const fila = i + 2, r = s.getRange(fila, 1, 1, 18).getValues()[0]; if (r[17] === 'ELIMINADO') throw falla('NO_EXISTE', 'El pedido fue eliminado.');
-      const antes = String(r[col - 1]); s.getRange(fila, col).setValue(val);
-      const res = req.res || {}; if (res.H) { s.getRange(fila, 8, 1, 3).setValues([[res.H, res.I === '' || res.I == null ? '' : String(res.I), res.J || r[9]]]); }
-      s.getRange(fila, 16, 1, 2).setValues([[u.correo, ahora()]]);
-      registrar(u, 'MODIFICAR_PEDIDO', r[2] + ' · ' + r[4] + ' · ' + req.campo + ': "' + antes + '" → "' + val + '"' + (res.H ? ' · resultado: ' + res.H : ''));
-      tocarPed(); return {};
-    });
-  },
+  /* ---------- caché local (solo para no volver a bajar la base completa) ---------- */
+  let idb = null;
+  const open = () => new Promise(res => { try { const q = indexedDB.open('lubamaqui-cupo-online', 1); q.onupgradeneeded = () => q.result.createObjectStore('kv'); q.onsuccess = () => res(q.result); q.onerror = () => res(null); } catch (e) { res(null); } });
+  const kvGet = k => new Promise(res => { if (!idb) return res(undefined); try { const r = idb.transaction('kv').objectStore('kv').get(k); r.onsuccess = () => res(r.result); r.onerror = () => res(undefined); } catch (e) { res(undefined); } });
+  const kvSet = (k, v) => new Promise(res => { if (!idb) return res(); try { const t = idb.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = () => res(); t.onerror = () => res(); } catch (e) { res(); } });
 
-  deletePedido(req, u) {
-    return bloqueado(() => {
-      const s = hoja(H.PED), n = s.getLastRow(), ids = s.getRange(2, 1, Math.max(1, n - 1), 1).getValues(); const i = ids.findIndex(x => x[0] === req.id); if (i < 0) throw falla('NO_EXISTE', 'El pedido ya no existe.');
-      const fila = i + 2, r = s.getRange(fila, 1, 1, 18).getValues()[0];
-      s.getRange(fila, 16, 1, 3).setValues([[u.correo, ahora(), 'ELIMINADO']]).setNumberFormat('@');
-      registrar(u, 'ELIMINAR_PEDIDO', r[2] + ' · ' + r[4] + ' · total ' + r[6] + ' · fecha control ' + r[1]);
-      tocarPed(); return {};
-    });
-  },
+  /* ---------- acceso con Google ---------- */
+  const jwtExp = t => { try { return JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).exp * 1000; } catch (e) { return 0; } };
+  const showLogin = (msg, withOut) => { $('#login').hidden = false; $('#lmsg').textContent = msg || 'Ingresa con tu cuenta de Google para continuar.'; if (withOut) { $('#gbtn').innerHTML = '<button class="btn" id="otra">Ingresar con otra cuenta</button>'; $('#otra').onclick = () => logout(); } else drawBtn(); };
+  function drawBtn() { try { $('#gbtn').innerHTML = ''; google.accounts.id.renderButton($('#gbtn'), { theme: 'filled_blue', size: 'large', text: 'signin_with', locale: 'es' }); } catch (e) { } }
+  function onCred(resp) { token = resp.credential; tokenExp = jwtExp(token); $('#login').hidden = true; if (waitCred) { const w = waitCred; waitCred = null; w(token); } else if (!started) start(); }
+  function logout() { try { google.accounts.id.disableAutoSelect(); } catch (e) { } token = null; location.reload(); }
+  function ensureToken() {
+    if (token && (!tokenExp || tokenExp - Date.now() > 60000)) return Promise.resolve(token);
+    return new Promise(res => { waitCred = res; try { google.accounts.id.prompt(); } catch (e) { } setTimeout(() => { if (waitCred === res) showLogin('Tu sesión venció. Ingresa de nuevo.'); }, 5000); });
+  }
+  async function api(action, data, tries) {
+    const tk = await ensureToken(); let r;
+    try { const resp = await fetch(CFG.API_URL, { method: 'POST', body: JSON.stringify(Object.assign({ action, token: tk }, data || {})), redirect: 'follow' }); r = await resp.json(); }
+    catch (e) { const er = new Error('No hay conexión con el servidor. Revisa tu internet e inténtalo de nuevo.'); er.code = 'RED'; throw er; }
+    if (!r.ok) { if (r.error === 'TOKEN' && !(tries > 0)) { token = null; return api(action, data, 1); } const er = new Error(r.mensaje || r.error); er.code = r.error; throw er; }
+    return r;
+  }
 
-  setBase(req, u) { return cargar(H.BASE, 8, req.rows, 'baseV', 'baseAt', 'baseBy', 'CARGAR_BASE_CLIENTES', u); },
-  setCartera(req, u) { return cargar(H.CAR, 4, req.rows, 'carV', 'carAt', 'carBy', 'CARGAR_CARTERA', u); },
+  /* ---------- datos ---------- */
+  const mkBase = rows => rows.map(r => [String(r[0]), Cupo.norm(r[1]), Cupo.norm(r[2]), Cupo.norm(r[3]), Cupo.norm(r[4]), Number(r[5]) || 0, Number(r[6]) || 0, Number(r[7]) || 0]);
+  const mkCar = rows => rows.map(r => [Cupo.norm(r[0]), r[1] ? Cupo.dayOf(r[1]) : null, Number(r[2]) || 0, Number(r[3]) || 0]);
+  const toPed = a => ({ id: a[0], fc: Cupo.dayOf(a[1]), no: String(a[2] || ''), fe: Cupo.dayOf(a[3]), cli: Cupo.norm(a[4]), fa: String(a[5] || ''), to: Number(a[6]) || 0, acc: String(a[10] || ''), resp: String(a[11] || ''), obs: String(a[12] || ''), by: String(a[13] || ''), at: String(a[14] || ''), upBy: String(a[15] || ''), upAt: String(a[16] || '') });
+  function reindex() { B = base.length ? Cupo.indexBase(base) : null; C = Cupo.indexCartera(car); }
+  function recalc() { today = Cupo.todayN(); EV = B ? Cupo.evaluate(peds, B, C, today, meta.umbral) : peds.map(() => ({ J: 'FALTAN BASES', H: 'NO APROBADO', I: '', found: false, Q: null, P: null })); }
+  async function loadBases(force) {
+    const cv = force ? {} : { baseV: await kvGet('bv'), carV: await kvGet('cv') };
+    const r = await api('bases', cv); meta.umbral = r.umbral || meta.umbral;
+    if (r.sinCambios && !force) { base = (await kvGet('base')) || []; car = (await kvGet('car')) || []; meta.v = r.versiones; }
+    else { base = mkBase(r.base); car = mkCar(r.car); meta.v = r.versiones; meta.info = r.meta || {}; await kvSet('base', base); await kvSet('car', car); await kvSet('bv', r.versiones.baseV); await kvSet('cv', r.versiones.carV); await kvSet('info', meta.info); }
+    if (r.sinCambios) meta.info = (await kvGet('info')) || {};
+    reindex();
+  }
+  async function loadPedidos(force) {
+    const r = await api('pedidos', force ? {} : { pedV: meta.pedV }); if (r.sinCambios) return false;
+    meta.pedV = r.pedV; peds = r.items.map(toPed); return true;
+  }
+  async function refresh(quiet) {
+    try { const ch = await loadPedidos(); const pv = meta.v.baseV + '|' + meta.v.carV; const b = await api('me'); meta.umbral = b.umbral; const nv = b.versiones; if (nv.baseV !== meta.v.baseV || nv.carV !== meta.v.carV) await loadBases(); recalc(); status(); fillFc(); render(); $('#sync').textContent = 'Actualizado ' + new Date().toLocaleTimeString('es-EC', { hour: '2-digit', minute: '2-digit' }); if (!quiet) toast('Datos actualizados.'); }
+    catch (e) { handleErr(e, quiet); }
+  }
+  function handleErr(e, quiet) { if (e.code === 'NO_AUTORIZADO') { showLogin(e.message, true); return; } if (!quiet || e.code !== 'RED') toast(e.message || String(e), true); console.error(e); }
 
-  setConfig(req, u) { const v = Math.max(1, parseInt(req.umbral, 10) || 61); cfgSet('umbral', v); registrar(u, 'CAMBIAR_REGLA', 'Días vencidos para NO APROBADO: ' + v); return { umbral: v }; },
+  /* ---------- arranque tras el login ---------- */
+  async function start() {
+    started = true; idb = await open();
+    try {
+      const r = await api('me'); user = r.usuario; meta.umbral = r.umbral || 61; meta.v = r.versiones;
+      setupUser(); setSt('Cargando datos…'); await loadBases(); await loadPedidos(true); recalc(); status(); fillFc(); render();
+      $('#sync').textContent = 'Actualizado ' + new Date().toLocaleTimeString('es-EC', { hour: '2-digit', minute: '2-digit' });
+      setInterval(() => { if (document.visibilityState === 'visible') refresh(true); }, 90000);
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refresh(true); });
+    } catch (e) { started = false; if (e.code === 'NO_AUTORIZADO') showLogin(e.message, true); else { showLogin('No se pudo conectar: ' + (e.message || e)); } console.error(e); }
+  }
+  function setupUser() {
+    $('#who').innerHTML = `<div><b>${esc(user.nombre)}</b><span class="badge">${esc(user.rol)}</span></div><div>${esc(user.correo)}</div><div id="sync"></div><div><button class="lk" id="b-ref">Actualizar ahora</button> · <button class="lk" id="b-out">Salir</button></div>`;
+    $('#b-ref').onclick = () => refresh(false); $('#b-out').onclick = logout;
+    const val = can('VALIDADOR'), adm = can('ADMIN');
+    $('#addcard').hidden = !val; $('#nav-log').hidden = !val; $$('.adm').forEach(e => e.hidden = !adm); $('#noadm').hidden = adm ? true : false; $('#umbral').disabled = !adm; $('#umbral').value = meta.umbral;
+  }
+  function status() {
+    const i = meta.info || {}; const fm = s => s ? s : 'sin cargar';
+    $('#s-base').innerHTML = base.length ? `<span class="ok-t">Base de clientes: ${base.length.toLocaleString('de-DE')} clientes</span> · actualizada ${esc(fm(i.baseAt))}${i.baseBy ? ' por ' + esc(i.baseBy) : ''}` : '<span class="bad-t">Base de clientes sin cargar</span>';
+    $('#s-car').innerHTML = car.length ? `<span class="ok-t">Cartera: ${car.length.toLocaleString('de-DE')} líneas</span> · actualizada ${esc(fm(i.carAt))}${i.carBy ? ' por ' + esc(i.carBy) : ''}` : '<span class="bad-t">Cartera sin cargar</span>';
+    setSt(base.length && car.length ? `Base ${base.length.toLocaleString('de-DE')} clientes · Cartera ${car.length.toLocaleString('de-DE')} líneas` : 'Faltan las bases de datos');
+    const msgs = []; if (!base.length || !car.length) msgs.push(can('ADMIN') ? 'Faltan datos: carga la base de clientes y la cartera en «Bases de datos».' : 'Faltan datos: el administrador debe cargar las bases.');
+    else { const age = s => { if (!s) return 0; const d = new Date(s.replace(' ', 'T')); return isNaN(d) ? 0 : Math.floor((Date.now() - d) / 86400000); }; const a = Math.max(age(i.baseAt), age(i.carAt)); if (a >= 4) msgs.push(`Las bases tienen ${a} días sin actualizarse. Los cupos y vencidos pueden estar desfasados.`); }
+    $('#warn').innerHTML = msgs.map(m => `<div class="note" style="margin-bottom:8px">${m}</div>`).join('');
+  }
 
-  bitacora(req) { const s = hoja(H.LOG), n = s.getLastRow(), lim = Math.min(Number(req.limite) || 300, 2000); if (n < 2) return { filas: [] }; const ini = Math.max(2, n - lim + 1); return { filas: s.getRange(ini, 1, n - ini + 1, 5).getValues().reverse() }; }
-};
-function ver(c) { return { baseV: c.baseV || '0', carV: c.carV || '0', pedV: c.pedV || '0' }; }
-function cargar(nombre, ncol, rows, kV, kAt, kBy, accion, u) {
-  if (!Array.isArray(rows) || !rows.length) throw falla('DATOS', 'No llegaron filas para cargar.');
-  if (rows.some(r => !Array.isArray(r) || r.length !== ncol)) throw falla('DATOS', 'Formato de filas incorrecto.');
-  return bloqueado(() => {
-    const s = hoja(nombre), n = s.getLastRow(); if (n >= 2) s.getRange(2, 1, n - 1, ncol).clearContent();
-    asegurar(s, rows.length + 1); s.getRange(2, 1, rows.length, ncol).setValues(rows);
-    const t = ahora(); cfgSet(kV, String(Date.now())); cfgSet(kAt, t); cfgSet(kBy, u.correo);
-    registrar(u, accion, rows.length + ' filas'); return { filas: rows.length, versiones: ver(cfgAll()) };
+  /* ---------- pedidos ---------- */
+  $('#add').addEventListener('click', async () => {
+    if (!B) { toast('Primero deben cargarse las bases.', true); return; }
+    const fc = Cupo.dayOf($('#fc').value); if (fc == null) { toast('Indica la fecha de control.', true); return; }
+    const { out, bad } = Cupo.parsePaste($('#paste').value, fc); if (!out.length) { toast('No encontré pedidos. Pega las 5 columnas (C a G) separadas por tabulador.', true); return; }
+    const have = new Set(peds.map(p => p.no).filter(Boolean)); let dup = 0; const nuevos = []; for (const p of out) { if (p.no && have.has(p.no)) { dup++; continue; } have.add(p.no); nuevos.push(p); }
+    if (!nuevos.length) { $('#addmsg').textContent = `0 agregados · ${dup} omitidos por N° interno repetido.`; return; }
+    const ev = Cupo.evaluate(peds.concat(nuevos), B, C, today, meta.umbral).slice(peds.length);
+    const items = nuevos.map((p, i) => ({ fc: Cupo.isoD(p.fc), no: p.no, fe: p.fe != null ? Cupo.isoD(p.fe) : '', cli: p.cli, fa: p.fa, to: p.to, acc: 'PENDIENTE', res: { H: ev[i].H, I: ev[i].I, J: ev[i].J } }));
+    $('#add').disabled = true;
+    try { const r = await api('addPedidos', { items }); await loadPedidos(true); recalc(); $('#paste').value = ''; fillFc(Cupo.isoD(fc)); render(); $('#addmsg').textContent = `${r.agregados} agregados y guardados en línea` + (dup + r.repetidos ? ` · ${dup + r.repetidos} omitidos por N° interno repetido` : '') + (bad.length ? ` · ${bad.length} líneas ilegibles` : '') + '.'; }
+    catch (e) { handleErr(e); } $('#add').disabled = false;
   });
-}
+  function fillFc(sel) { const set = [...new Set(peds.map(p => p.fc).filter(x => x != null))].sort((a, b) => b - a); const cur = sel || $('#ffc').value; $('#ffc').innerHTML = '<option value="">Todas</option>' + set.map(d => `<option value="${Cupo.isoD(d)}">${Cupo.fmtD(d)}</option>`).join(''); $('#ffc').value = set.some(d => Cupo.isoD(d) === cur) ? cur : (set.length ? Cupo.isoD(set[0]) : ''); }
+  function filtered() {
+    const fc = $('#ffc').value ? Cupo.dayOf($('#ffc').value) : null, rs = $('#fres').value, ac = $('#facc').value, q = Cupo.norm($('#fq').value);
+    const o = []; peds.forEach((p, i) => { if (fc != null && p.fc !== fc) return; const e = EV[i]; if (rs && e.H !== rs) return; if (ac) { const a = (p.acc || '').toUpperCase(); if (ac === '-' ? a : a !== ac) return; } if (q && !(p.cli.includes(q) || (p.no || '').toUpperCase().includes(q) || (p.fa || '').toUpperCase().includes(q))) return; o.push(i); });
+    return o;
+  }
+  const who = s => s ? s.split('@')[0] : '';
+  function render() {
+    if (!$('#ffc').options.length) fillFc();
+    view = filtered(); const pages = Math.max(1, Math.ceil(view.length / PER)); if (page >= pages) page = pages - 1;
+    const st = { ap: 0, no: 0, ins: 0, mora: 0, nf: 0 }; for (const i of view) { const e = EV[i]; if (e.H === 'APROBADO') st.ap++; else st.no++; if (e.insuf) st.ins++; if (e.I !== '') st.mora++; if (!e.found) st.nf++; }
+    $('#stats').innerHTML = `<div class="stat"><b>${view.length}</b><span>Pedidos en la vista</span></div><div class="stat g"><b>${st.ap}</b><span>Aprobados</span></div><div class="stat r"><b>${st.no}</b><span>No aprobados</span></div><div class="stat w"><b>${st.ins}</b><span>Cupo insuficiente</span></div><div class="stat w"><b>${st.mora}</b><span>Con vencidos ≥ ${meta.umbral} días</span></div><div class="stat"><b>${st.nf}</b><span>Cliente no encontrado</span></div>`;
+    $('#ttl').textContent = `Pedidos registrados (${peds.length.toLocaleString('de-DE')})`;
+    const ro = can('VALIDADOR') ? '' : ' disabled', adm = can('ADMIN');
+    const rows = view.slice(page * PER, page * PER + PER).map(i => { const p = peds[i], e = EV[i]; const cls = e.insuf ? 'ins' : (!e.found ? 'nf' : '');
+      return `<tr data-i="${i}"><td>${Cupo.fmtD(p.fc)}</td><td>${esc(p.no)}</td><td>${Cupo.fmtD(p.fe)}</td><td>${esc(p.cli)}${e.ven ? `<div class="sub">${esc(e.ven)}</div>` : ''}</td><td>${esc(p.fa)}</td><td class="n">${f2(p.to)}</td><td><span class="pill ${e.H === 'APROBADO' ? 'ok' : 'no'}">${e.H}</span></td><td class="n">${esc(e.I)}</td><td class="obs ${cls}">${esc(e.J)}</td><td><select data-f="acc"${ro}><option value=""></option><option${p.acc === 'PENDIENTE' ? ' selected' : ''}>PENDIENTE</option><option${p.acc === 'SOLUCIONADO' ? ' selected' : ''}>SOLUCIONADO</option></select></td><td class="r"><input data-f="resp" value="${esc(p.resp)}"${ro}></td><td class="o"><input data-f="obs" value="${esc(p.obs)}"${ro}></td><td class="reg" title="${esc(p.by + ' ' + p.at + (p.upBy ? ' · modificó ' + p.upBy + ' ' + p.upAt : ''))}">${esc(who(p.by))}<br>${esc(p.upBy ? 'mod. ' + who(p.upBy) : '')}</td><td>${adm ? '<button class="x" data-del title="Eliminar">×</button>' : ''}</td></tr>`; });
+    $('#tb').innerHTML = rows.join('') || `<tr><td colspan="14" class="hint">${peds.length ? 'Ningún pedido coincide con los filtros.' : 'Aún no hay pedidos registrados.'}</td></tr>`;
+    $('#pg').textContent = `Página ${page + 1} de ${pages} · ${view.length} pedidos`; $('#pp').disabled = page === 0; $('#pn').disabled = page >= pages - 1;
+  }
+  $('#tb').addEventListener('change', async e => {
+    const tr = e.target.closest('tr'); if (!tr || !can('VALIDADOR')) return; const i = +tr.dataset.i, f = e.target.dataset.f; if (!f) return; const p = peds[i];
+    const antes = p[f]; p[f] = e.target.value; recalc(); const ev = EV[i]; if (f === 'acc') render();
+    try { await api('updatePedido', { id: p.id, campo: f, valor: p[f], res: { H: ev.H, I: ev.I, J: ev.J } }); p.upBy = user.correo; toast('Cambio guardado.'); }
+    catch (er) { p[f] = antes; handleErr(er); await loadPedidos(true).catch(() => { }); recalc(); render(); }
+  });
+  $('#tb').addEventListener('click', async e => {
+    if (!e.target.matches('[data-del]')) return; const i = +e.target.closest('tr').dataset.i, p = peds[i];
+    if (!confirm('¿Eliminar el pedido ' + (p.no || '') + ' de ' + p.cli + '? Quedará registrado en la bitácora.')) return;
+    try { await api('deletePedido', { id: p.id }); await loadPedidos(true); recalc(); fillFc(); render(); toast('Pedido eliminado.'); } catch (er) { handleErr(er); }
+  });
+  ['ffc', 'fres', 'facc'].forEach(id => $('#' + id).addEventListener('change', () => { page = 0; render(); })); $('#fq').addEventListener('input', () => { page = 0; render(); });
+  $('#pp').addEventListener('click', () => { page--; render(); }); $('#pn').addEventListener('click', () => { page++; render(); });
+
+  /* ---------- bases (solo administrador) ---------- */
+  async function readWb(file) { if (!window.ExcelJS) throw new Error('No se cargó la librería de Excel. Revisa la conexión y recarga.'); const wb = new ExcelJS.Workbook(); await wb.xlsx.load(await file.arrayBuffer()); return wb; }
+  const rowsOf = ws => { const o = []; ws.eachRow({ includeEmpty: true }, (r, i) => { o[i - 1] = Array.from(r.values).slice(1); }); return o; };
+  const sheetBy = (wb, re) => wb.worksheets.find(w => re.test(w.name));
+  async function guarded(fn) { try { setSt('Procesando archivo…'); await new Promise(r => setTimeout(r, 30)); await fn(); } catch (e) { handleErr(e); } status(); }
+  const upBase = async rows => { setSt('Subiendo base de clientes…'); await api('setBase', { rows }); };
+  const upCar = async rows => { setSt('Subiendo cartera…'); await api('setCartera', { rows: rows.map(r => [r[0], r[1] != null ? Cupo.isoD(r[1]) : '', r[2], r[3]]) }); };
+  const after = async () => { await loadBases(true); recalc(); status(); fillFc(); render(); };
+  $('#f-base').addEventListener('change', e => { const f = e.target.files[0]; if (!f) return; guarded(async () => { const wb = await readWb(f); const rows = Cupo.parseBase(rowsOf(sheetBy(wb, /base|client/i) || wb.worksheets[0])); await upBase(rows); await after(); toast('Base de clientes actualizada en línea: ' + rows.length.toLocaleString('de-DE') + ' clientes.'); }); e.target.value = ''; });
+  $('#f-car').addEventListener('change', e => { const f = e.target.files[0]; if (!f) return; guarded(async () => { const wb = await readWb(f); const rows = Cupo.parseCartera(rowsOf(sheetBy(wb, /cartera/i) || wb.worksheets[0])); await upCar(rows); await after(); toast('Cartera actualizada en línea: ' + rows.length.toLocaleString('de-DE') + ' líneas.'); }); e.target.value = ''; });
+  $('#f-all').addEventListener('change', e => { const f = e.target.files[0]; if (!f) return; guarded(async () => {
+    const wb = await readWb(f); const wb1 = sheetBy(wb, /base/i), wc = sheetBy(wb, /cartera/i), wp = sheetBy(wb, /pedido/i); if (!wb1 && !wc) throw new Error('No encontré las hojas BASE CLIENTES ni CARTERA en ese archivo.');
+    const parts = []; if (wb1) { const r = Cupo.parseBase(rowsOf(wb1)); await upBase(r); parts.push(r.length.toLocaleString('de-DE') + ' clientes'); } if (wc) { const r = Cupo.parseCartera(rowsOf(wc)); await upCar(r); parts.push(r.length.toLocaleString('de-DE') + ' líneas de cartera'); }
+    await after();
+    if (wp && $('#imp-ped').checked) { const inc = Cupo.parsePedidosSheet(rowsOf(wp)); const have = new Set(peds.map(p => p.no).filter(Boolean)); const nue = inc.filter(p => !(p.no && have.has(p.no))); const ev = Cupo.evaluate(nue, B, C, today, meta.umbral);
+      const items = nue.map((p, i) => ({ fc: p.fc != null ? Cupo.isoD(p.fc) : '', no: p.no, fe: p.fe != null ? Cupo.isoD(p.fe) : '', cli: p.cli, fa: p.fa, to: p.to, acc: p.acc || '', resp: p.resp, obs: p.obs, res: { H: ev[i].H, I: ev[i].I, J: ev[i].J } }));
+      let n = 0; for (let k = 0; k < items.length; k += 400) { setSt('Importando pedidos ' + Math.min(k + 400, items.length) + ' de ' + items.length + '…'); const r = await api('addPedidos', { items: items.slice(k, k + 400), importar: true }); n += r.agregados; }
+      await loadPedidos(true); recalc(); fillFc(); render(); parts.push(n + ' pedidos'); }
+    toast('Cargado en línea: ' + parts.join(', ') + '.'); }); e.target.value = ''; });
+  $('#umbral').addEventListener('change', async e => { if (!can('ADMIN')) return; const v = Math.max(1, parseInt(e.target.value, 10) || 61); e.target.value = v; try { await api('setConfig', { umbral: v }); meta.umbral = v; recalc(); render(); $$('.u').forEach(s => s.textContent = v); toast('Regla guardada: no aprobado desde ' + v + ' días vencidos.'); } catch (er) { handleErr(er); } });
+
+  /* ---------- bitácora ---------- */
+  async function loadLog() { try { const r = await api('bitacora', { limite: 300 }); $('#logb').innerHTML = r.filas.map(f => `<tr><td class="reg">${esc(f[0])}</td><td>${esc(f[1])}</td><td>${esc(f[2])}</td><td><b>${esc(f[3])}</b></td><td>${esc(f[4])}</td></tr>`).join('') || '<tr><td colspan="5" class="hint">Sin registros.</td></tr>'; } catch (e) { handleErr(e); } }
+
+  /* ---------- Excel de salida ---------- */
+  function dl(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }
+  $('#xls').addEventListener('click', async () => {
+    if (!view.length) { toast('No hay pedidos en la vista actual.', true); return; }
+    try { const wb = new ExcelJS.Workbook(), ws = wb.addWorksheet('PEDIDOS'); const heads = ['fecha control', 'Fecha y hora de actualización', 'No. Interno', 'fecha', 'cliente', 'factura', 'total', 'Resultado', 'Días vencidos (si no aprobado)', 'Observación de cupo', 'Observaciones', 'RESPONSABLE', 'ACCION', 'Vendedor', 'Registró', 'Registrado el', 'Modificó'];
+      ws.addRow(heads); const h = ws.getRow(1); h.font = { bold: true, color: { argb: 'FFFFFFFF' } }; h.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F2A4A' } };
+      const d = n => n == null ? null : new Date(n * 86400000);
+      for (const i of view) { const p = peds[i], e = EV[i]; const r = ws.addRow([d(p.fc), new Date(), p.no, d(p.fe), p.cli, p.fa, p.to, e.H, e.I === '' ? null : e.I, e.J, p.obs, p.resp, p.acc, e.ven, p.by, p.at, p.upBy]); r.getCell(8).font = { bold: true, color: { argb: e.H === 'APROBADO' ? 'FF177A4B' : 'FFC8102E' } }; }
+      ws.getColumn(1).numFmt = 'dd/mm/yyyy'; ws.getColumn(4).numFmt = 'dd/mm/yyyy'; ws.getColumn(2).numFmt = 'dd/mm/yyyy hh:mm'; ws.getColumn(7).numFmt = '#,##0.00';
+      [12, 17, 13, 12, 36, 20, 11, 14, 12, 70, 28, 18, 14, 30, 28, 20, 28].forEach((w, k) => ws.getColumn(k + 1).width = w); ws.views = [{ state: 'frozen', ySplit: 1 }]; ws.autoFilter = { from: 'A1', to: 'Q1' };
+      const buf = await wb.xlsx.writeBuffer(); dl(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'PEDIDOS_VALIDACION_' + Cupo.isoD(today) + '.xlsx'); toast('Excel generado.');
+    } catch (e) { toast('No se pudo generar el Excel: ' + e.message, true); }
+  });
+
+  /* ---------- navegación y arranque ---------- */
+  $$('.pill2').forEach(b => b.addEventListener('click', () => { $$('.pill2').forEach(x => x.classList.toggle('on', x === b)); ['ped', 'bases', 'log', 'ayuda'].forEach(v => $('#v-' + v).hidden = v !== b.dataset.v); if (b.dataset.v === 'log') loadLog(); }));
+  function boot() {
+    const t = new Date(); $('#fc').value = t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0');
+    if (!CFG.API_URL || /PEGAR/.test(CFG.API_URL) || !CFG.CLIENT_ID || /PEGAR/.test(CFG.CLIENT_ID)) { $('#lmsg').textContent = 'Falta configurar la página: en el archivo HTML hay que poner la URL del servidor (API_URL) y el ID de cliente de Google (CLIENT_ID). Mira la guía de instalación.'; return; }
+    let n = 0; const iv = setInterval(() => {
+      if (window.google && google.accounts && google.accounts.id) { clearInterval(iv); google.accounts.id.initialize({ client_id: CFG.CLIENT_ID, callback: onCred, auto_select: true, cancel_on_tap_outside: false }); showLogin(); try { google.accounts.id.prompt(); } catch (e) { } }
+      else if (++n > 100) { clearInterval(iv); $('#lmsg').textContent = 'No se pudo cargar el acceso de Google. Revisa tu conexión a internet y recarga la página.'; }
+    }, 100);
+  }
+  boot();
+})();
+</script>
+</body></html>
