@@ -244,7 +244,7 @@ if (typeof module !== 'undefined') module.exports = Cupo;
   const f2 = v => v == null ? '' : v.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const NIVEL = { CONSULTA: 1, VALIDADOR: 2, ADMIN: 3 };
   let user = null, token = null, tokenExp = 0, waitCred = null, started = false;
-  let base = [], car = [], peds = [], meta = { umbral: 61, montoMin: 100, excTxt: '', v: {}, info: {} }, B = null, C = null, EV = [], today = Cupo.todayN(), page = 0, view = [];
+  let delBusy = false, base = [], car = [], peds = [], meta = { umbral: 61, montoMin: 100, excTxt: '', v: {}, info: {} }, B = null, C = null, EV = [], today = Cupo.todayN(), page = 0, view = [];
   const PER = 100;
   const can = r => !!user && NIVEL[user.rol] >= NIVEL[r];
   let tt; const toast = (t, bad) => { const e = $('#toast'); e.textContent = t; e.className = 'toast show' + (bad ? ' bad' : ''); clearTimeout(tt); tt = setTimeout(() => e.className = 'toast', 5600); };
@@ -358,6 +358,7 @@ if (typeof module !== 'undefined') module.exports = Cupo;
     const rows = view.slice(page * PER, page * PER + PER).map(i => { const p = peds[i], e = EV[i]; const cls = e.insuf ? 'ins' : (!e.found ? 'nf' : '');
       return `<tr data-i="${i}"><td>${can('VALIDADOR') ? '<button class="x" data-del title="Eliminar este pedido">×</button>' : ''}</td><td>${Cupo.fmtD(p.fc)}</td><td>${esc(p.no)}</td><td>${Cupo.fmtD(p.fe)}</td><td>${esc(p.cli)}${e.ven ? `<div class="sub">${esc(e.ven)}</div>` : ''}</td><td>${esc(p.fa)}</td><td class="n">${f2(p.to)}</td><td><span class="pill ${e.H === 'APROBADO' ? 'ok' : 'no'}">${e.H}</span></td><td class="n">${esc(e.I)}</td><td class="obs ${cls}">${esc(e.J)}</td><td><select data-f="acc"${ro}><option value=""></option><option${p.acc === 'PENDIENTE' ? ' selected' : ''}>PENDIENTE</option><option${p.acc === 'SOLUCIONADO' ? ' selected' : ''}>SOLUCIONADO</option></select></td><td class="r"><input data-f="resp" value="${esc(p.resp)}"${ro}></td><td class="o"><input data-f="obs" value="${esc(p.obs)}"${ro}></td><td class="reg" title="${esc(p.by + ' ' + p.at + (p.upBy ? ' · modificó ' + p.upBy + ' ' + p.upAt : ''))}">${esc(who(p.by))}<br>${esc(p.upBy ? 'mod. ' + who(p.upBy) : '')}</td></tr>`; });
     $('#tb').innerHTML = rows.join('') || `<tr><td colspan="14" class="hint">${peds.length ? 'Ningún pedido coincide con los filtros.' : 'Aún no hay pedidos registrados.'}</td></tr>`;
+    if (!delBusy) $('#delview').disabled = !view.length;
     $('#pg').textContent = `Página ${page + 1} de ${pages} · ${view.length} pedidos`; $('#pp').disabled = page === 0; $('#pn').disabled = page >= pages - 1;
   }
   $('#tb').addEventListener('change', async e => {
@@ -371,10 +372,12 @@ if (typeof module !== 'undefined') module.exports = Cupo;
     if (!confirm('¿Eliminar el pedido ' + (p.no || '') + ' de ' + p.cli + '? Quedará registrado en la bitácora.')) return;
     try { await api('deletePedido', { id: p.id }); await loadPedidos(true); recalc(); fillFc(); render(); toast('Pedido eliminado.'); } catch (er) { handleErr(er); }
   });
-  $('#delview').addEventListener('click', async () => { if (!can('VALIDADOR') || !view.length) return; const ids = view.map(i => peds[i].id);
+  $('#delview').addEventListener('click', async () => { if (!can('VALIDADOR') || !view.length || delBusy) return; const ids = view.map(i => peds[i].id);
     if (!confirm('¿Eliminar los ' + ids.length + ' pedidos que se ven con los filtros actuales? Cada eliminación queda registrada en la bitácora.')) return;
-    $('#delview').disabled = true; let n = 0; try { for (const id of ids) { await api('deletePedido', { id }); n++; setSt('Eliminando ' + n + ' de ' + ids.length + '…'); } toast(n + ' pedidos eliminados.'); } catch (er) { handleErr(er); }
-    await loadPedidos(true); recalc(); fillFc(); render(); status(); $('#delview').disabled = false; });
+    delBusy = true; $('#delview').disabled = true; let n = 0;
+    try { for (const id of ids) { await api('deletePedido', { id }); n++; $('#delview').textContent = 'Eliminando ' + n + ' de ' + ids.length + '…'; } toast(n + ' pedidos eliminados.'); }
+    catch (er) { handleErr(er); }
+    finally { delBusy = false; $('#delview').textContent = 'Eliminar los de la vista'; try { await loadPedidos(true); recalc(); fillFc(); render(); status(); } catch (er) { handleErr(er); } $('#delview').disabled = !view.length; } });
   ['ffc', 'fres', 'facc'].forEach(id => $('#' + id).addEventListener('change', () => { page = 0; render(); })); $('#fq').addEventListener('input', () => { page = 0; render(); });
   $('#pp').addEventListener('click', () => { page--; render(); }); $('#pn').addEventListener('click', () => { page++; render(); });
 
