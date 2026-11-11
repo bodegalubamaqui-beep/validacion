@@ -100,7 +100,8 @@ select:focus,input:focus,textarea:focus{outline:2px solid var(--accent)}
 <div id="v-ped">
   <section class="card red" id="addcard"><h2>Registrar nuevos pedidos</h2>
     <div class="row"><label class="f">Fecha de control<input type="date" id="fc"></label><button class="btn" id="add">+ Validar y agregar</button></div>
-    <textarea id="paste" placeholder="Pega aquí las columnas C a G de tu hoja (una fila por pedido):&#10;No. Interno   fecha   cliente   factura   total&#10;P000020454   12/10/2026   ROMERO DELGADO JOSEFA LILIANA   002-001-000094388   540,10"></textarea>
+    <textarea id="paste" placeholder="Pega aquí el listado de pedidos de Perseo, completo o por partes (una fila por pedido):&#10;No. Interno   fecha   cliente   factura   total   (las columnas de más se ignoran)&#10;P000020454   12/10/2026   ROMERO DELGADO JOSEFA LILIANA   002-001-000094388   540,10"></textarea>
+    <label class="hint" style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" id="soloNuevos" checked> Tomar solo los pedidos posteriores al último registrado <b id="lastno"></b></label>
     <div class="hint" id="addmsg"></div>
   </section>
   <div id="warn" style="margin-top:16px"></div>
@@ -286,6 +287,8 @@ if (typeof module !== 'undefined') module.exports = Cupo;
   const mkBase = rows => rows.map(r => [String(r[0]), Cupo.norm(r[1]), Cupo.norm(r[2]), Cupo.norm(r[3]), Cupo.norm(r[4]), Number(r[5]) || 0, Number(r[6]) || 0, Number(r[7]) || 0]);
   const mkCar = rows => rows.map(r => [Cupo.norm(r[0]), r[1] ? Cupo.dayOf(r[1]) : null, Number(r[2]) || 0, Number(r[3]) || 0, Number(r[4]) || 0, Cupo.norm(r[5] || '')]);
   const toPed = a => ({ id: a[0], fc: Cupo.dayOf(a[1]), no: String(a[2] || ''), fe: Cupo.dayOf(a[3]), cli: Cupo.norm(a[4]), fa: String(a[5] || ''), to: Number(a[6]) || 0, acc: String(a[10] || ''), resp: String(a[11] || ''), obs: String(a[12] || ''), by: String(a[13] || ''), at: String(a[14] || ''), upBy: String(a[15] || ''), upAt: String(a[16] || '') });
+  function ultimos() { const mx = new Map(); for (const q of peds) { const m = /^([A-Za-z]+)(\d+)$/.exec(q.no || ''); if (m) { const k = m[1].toUpperCase(); mx.set(k, Math.max(mx.get(k) || 0, +m[2])); } } return mx; }
+  function showLast() { const el = $('#lastno'); if (!el) return; const mx = ultimos(); let best = ''; for (const q of peds) if (/^[A-Za-z]+\d+$/.test(q.no || '') && (!best || q.no.length > best.length || (q.no.length === best.length && q.no > best))) best = q.no; el.textContent = best ? '(' + best + ')' : ''; }
   let excKey = null, excMap = null;
   function evOpts() { if (excKey !== meta.excTxt) { excKey = meta.excTxt; excMap = Cupo.buildExc(Cupo.parseExcepciones(meta.excTxt)); } return { montoMin: meta.montoMin, exc: excMap }; }
   function cfgFrom(r) { if (!r) return; if (r.umbral) meta.umbral = r.umbral; if (r.montoMin != null) meta.montoMin = Number(r.montoMin) || 0; if (r.excepciones != null) meta.excTxt = String(r.excepciones); }
@@ -341,12 +344,14 @@ if (typeof module !== 'undefined') module.exports = Cupo;
     if (!B) { toast('Primero deben cargarse las bases.', true); return; }
     const fc = Cupo.dayOf($('#fc').value); if (fc == null) { toast('Indica la fecha de control.', true); return; }
     const { out, bad } = Cupo.parsePaste($('#paste').value, fc); if (!out.length) { toast('No encontré pedidos. Pega las 5 columnas (C a G) separadas por tabulador.', true); return; }
-    const have = new Set(peds.map(p => p.no).filter(Boolean)); let dup = 0; const nuevos = []; for (const p of out) { if (p.no && have.has(p.no)) { dup++; continue; } have.add(p.no); nuevos.push(p); }
-    if (!nuevos.length) { $('#addmsg').textContent = `0 agregados · ${dup} omitidos por N° interno repetido.`; return; }
+    let viejos = 0, lista = out;
+    if ($('#soloNuevos').checked) { const mx = ultimos(); lista = out.filter(p => { const m = /^([A-Za-z]+)(\d+)$/.exec(p.no || ''); if (!m) return true; const k = mx.get(m[1].toUpperCase()); if (k != null && +m[2] <= k) { viejos++; return false; } return true; }); }
+    const have = new Set(peds.map(p => p.no).filter(Boolean)); let dup = 0; const nuevos = []; for (const p of lista) { if (p.no && have.has(p.no)) { dup++; continue; } have.add(p.no); nuevos.push(p); }
+    if (!nuevos.length) { $('#addmsg').textContent = `0 agregados` + (viejos ? ` · ${viejos} anteriores al último registrado` : '') + (dup ? ` · ${dup} omitidos por N° interno repetido` : '') + '.'; return; }
     const ev = Cupo.evaluate(peds.concat(nuevos), B, C, today, meta.umbral, evOpts()).slice(peds.length);
     const items = nuevos.map((p, i) => ({ fc: Cupo.isoD(p.fc), no: p.no, fe: p.fe != null ? Cupo.isoD(p.fe) : '', cli: p.cli, fa: p.fa, to: p.to, acc: 'PENDIENTE', res: { H: ev[i].H, I: ev[i].I, J: ev[i].J } }));
     $('#add').disabled = true;
-    try { const r = await api('addPedidos', { items }); await loadPedidos(true); recalc(); $('#paste').value = ''; fillFc(Cupo.isoD(fc)); render(); $('#addmsg').textContent = `${r.agregados} agregados y guardados en línea` + (dup + r.repetidos ? ` · ${dup + r.repetidos} omitidos por N° interno repetido` : '') + (bad.length ? ` · ${bad.length} líneas ilegibles` : '') + '.'; }
+    try { const r = await api('addPedidos', { items }); await loadPedidos(true); recalc(); $('#paste').value = ''; fillFc(Cupo.isoD(fc)); render(); $('#addmsg').textContent = `${r.agregados} agregados y guardados en línea` + (viejos ? ` · ${viejos} omitidos por ser anteriores al último registrado` : '') + (dup + r.repetidos ? ` · ${dup + r.repetidos} omitidos por N° interno repetido` : '') + (bad.length ? ` · ${bad.length} líneas ilegibles` : '') + '.'; }
     catch (e) { handleErr(e); } $('#add').disabled = false;
   });
   function fillFc(sel) { const set = [...new Set(peds.map(p => p.fc).filter(x => x != null))].sort((a, b) => b - a); const cur = sel || $('#ffc').value; $('#ffc').innerHTML = '<option value="">Todas</option>' + set.map(d => `<option value="${Cupo.isoD(d)}">${Cupo.fmtD(d)}</option>`).join(''); $('#ffc').value = set.some(d => Cupo.isoD(d) === cur) ? cur : (set.length ? Cupo.isoD(set[0]) : ''); }
@@ -366,7 +371,7 @@ if (typeof module !== 'undefined') module.exports = Cupo;
     const rows = view.slice(page * PER, page * PER + PER).map(i => { const p = peds[i], e = EV[i]; const cls = e.insuf ? 'ins' : (!e.found ? 'nf' : '');
       return `<tr data-i="${i}"><td>${can('VALIDADOR') ? '<button class="x" data-del title="Eliminar este pedido">×</button>' : ''}</td><td>${Cupo.fmtD(p.fc)}</td><td>${esc(p.no)}</td><td>${Cupo.fmtD(p.fe)}</td><td>${esc(p.cli)}${e.ven ? `<div class="sub">${esc(e.ven)}</div>` : ''}</td><td>${esc(p.fa)}</td><td class="n">${f2(p.to)}</td><td><span class="pill ${e.H === 'APROBADO' ? 'ok' : 'no'}">${e.H}</span></td><td class="n">${esc(e.I)}</td><td class="obs ${cls}">${esc(e.J)}</td><td><select data-f="acc"${ro}><option value=""></option><option${p.acc === 'PENDIENTE' ? ' selected' : ''}>PENDIENTE</option><option${p.acc === 'SOLUCIONADO' ? ' selected' : ''}>SOLUCIONADO</option></select></td><td class="r"><input data-f="resp" value="${esc(p.resp)}"${ro}></td><td class="o"><input data-f="obs" value="${esc(p.obs)}"${ro}></td><td class="reg" title="${esc(p.by + ' ' + p.at + (p.upBy ? ' · modificó ' + p.upBy + ' ' + p.upAt : ''))}">${esc(who(p.by))}<br>${esc(p.upBy ? 'mod. ' + who(p.upBy) : '')}</td></tr>`; });
     $('#tb').innerHTML = rows.join('') || `<tr><td colspan="14" class="hint">${peds.length ? 'Ningún pedido coincide con los filtros.' : 'Aún no hay pedidos registrados.'}</td></tr>`;
-    if (!delBusy) $('#delview').disabled = !view.length;
+    if (!delBusy) $('#delview').disabled = !view.length; showLast();
     $('#pg').textContent = `Página ${page + 1} de ${pages} · ${view.length} pedidos`; $('#pp').disabled = page === 0; $('#pn').disabled = page >= pages - 1;
   }
   $('#tb').addEventListener('change', async e => {
