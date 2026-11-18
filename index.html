@@ -98,12 +98,6 @@ select:focus,input:focus,textarea:focus{outline:2px solid var(--accent)}
 <div id="err" class="note" hidden></div>
 
 <div id="v-ped">
-  <section class="card red" id="addcard"><h2>Registrar nuevos pedidos</h2>
-    <div class="row"><label class="f">Fecha de control<input type="date" id="fc"></label><button class="btn" id="add">+ Validar y agregar</button></div>
-    <textarea id="paste" placeholder="Pega aquí el listado de pedidos de Perseo, completo o por partes (una fila por pedido):&#10;No. Interno   fecha   cliente   factura   total   (las columnas de más se ignoran)&#10;P000020454   12/10/2026   ROMERO DELGADO JOSEFA LILIANA   002-001-000094388   540,10"></textarea>
-    <label class="hint" style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" id="soloNuevos" checked> Tomar solo los pedidos posteriores al último registrado <b id="lastno"></b></label>
-    <div class="hint" id="addmsg"></div>
-  </section>
   <div id="warn" style="margin-top:16px"></div>
   <div class="stats" id="stats" style="margin-top:16px"></div>
   <section class="card" style="margin-top:16px">
@@ -111,6 +105,12 @@ select:focus,input:focus,textarea:focus{outline:2px solid var(--accent)}
       <div class="row"><label class="f">Fecha control<select id="ffc"></select></label><label class="f">Resultado<select id="fres"><option value="">Todos</option><option>APROBADO</option><option>NO APROBADO</option></select></label><label class="f">Acción<select id="facc"><option value="">Todas</option><option>PENDIENTE</option><option>SOLUCIONADO</option><option value="-">Sin acción</option></select></label><label class="f">Buscar<input id="fq" placeholder="cliente, N° interno, factura"></label><button class="btn ghost" id="delview" type="button" hidden title="Elimina todos los pedidos que se ven con los filtros actuales">Eliminar los de la vista</button><button class="btn green" id="xls">Descargar Excel</button></div></div>
     <div class="scroll"><table class="t"><thead><tr><th></th><th>F. control</th><th>N° interno</th><th>Fecha</th><th>Cliente</th><th>Factura</th><th style="text-align:right">Total</th><th>Resultado</th><th>Días venc.</th><th>Observación de cupo</th><th>Acción</th><th>Responsable</th><th>Observaciones</th><th>Registró</th></tr></thead><tbody id="tb"></tbody></table></div>
     <div class="pager"><button class="btn ghost sm" id="pp">‹</button><span id="pg"></span><button class="btn ghost sm" id="pn">›</button></div>
+  </section>
+  <section class="card red" id="addcard" style="margin-top:16px"><h2>Registrar nuevos pedidos</h2>
+    <div class="row"><label class="f">Fecha de control<input type="date" id="fc"></label><button class="btn" id="add">+ Validar y agregar</button></div>
+    <textarea id="paste" placeholder="Pega aquí el listado de pedidos de Perseo, completo o por partes (una fila por pedido):&#10;No. Interno   fecha   cliente   factura   total   (las columnas de más se ignoran)&#10;P000020454   12/10/2026   ROMERO DELGADO JOSEFA LILIANA   002-001-000094388   540,10"></textarea>
+    <label class="hint" style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" id="soloNuevos" checked> Tomar solo los pedidos posteriores al último registrado <b id="lastno"></b></label>
+    <div class="hint" id="addmsg"></div>
   </section>
 </div>
 
@@ -183,6 +183,8 @@ const Cupo = (() => {
     const h = f.h, c = f.fijo != null ? { ruc: f.fijo, rs: f.fijo + 1, nc: f.fijo + 2, ven: f.fijo + 3, tar: f.fijo + 4, cupo: f.fijo + 5, dias: f.fijo + 6, saldo: f.fijo + 7 } : { ruc: col(h, x => x === 'ruc'), rs: col(h, x => x.startsWith('razon')), nc: col(h, x => x.startsWith('nombre')), ven: col(h, x => x === 'vendedor'), tar: col(h, x => x === 'tarifa'), cupo: col(h, x => x.startsWith('cupo') && !x.includes('aux')), dias: col(h, x => x.startsWith('dias')), saldo: col(h, x => x === 'saldo') };
     if (c.saldo < 0) throw new Error('No encontré la columna SALDO en la base de clientes.');
     const out = []; for (let i = f.i + 1; i < rows.length; i++) { const r = rows[i] || []; const rs = norm(val(r[c.rs])), nc = c.nc >= 0 ? norm(val(r[c.nc])) : ''; if (!rs && !nc) continue; out.push([String(val(r[c.ruc]) == null ? '' : val(r[c.ruc])).trim(), rs, nc, c.ven >= 0 ? norm(val(r[c.ven])) : '', c.tar >= 0 ? norm(val(r[c.tar])) : '', num(r[c.cupo]), c.dias >= 0 ? num(r[c.dias]) : 0, num(r[c.saldo])]); }
+    /* Si TODOS los cupos son 0 pero la columna DIAS CREDITO trae montos (export de Perseo con columnas corridas), el cupo real está en esa columna */
+    if (out.length && !out.some(r => r[5] > 0) && out.some(r => r[6] > 1000)) { out.forEach(r => { r[5] = r[6]; r[6] = 0; }); out.corregido = true; }
     return out;
   }
   function parseCartera(rows) {
@@ -290,14 +292,26 @@ if (typeof module !== 'undefined') module.exports = Cupo;
   /* ---------- datos ---------- */
   const mkBase = rows => rows.map(r => [String(r[0]), Cupo.norm(r[1]), Cupo.norm(r[2]), Cupo.norm(r[3]), Cupo.norm(r[4]), Number(r[5]) || 0, Number(r[6]) || 0, Number(r[7]) || 0]);
   const mkCar = rows => rows.map(r => [Cupo.norm(r[0]), r[1] ? Cupo.dayOf(r[1]) : null, Number(r[2]) || 0, Number(r[3]) || 0, Number(r[4]) || 0, Cupo.norm(r[5] || ''), String(r[6] || '')]);
-  const toPed = a => ({ id: a[0], fc: Cupo.dayOf(a[1]), no: String(a[2] || ''), fe: Cupo.dayOf(a[3]), cli: Cupo.norm(a[4]), fa: String(a[5] || ''), to: Number(a[6]) || 0, acc: String(a[10] || ''), resp: String(a[11] || ''), obs: String(a[12] || ''), by: String(a[13] || ''), at: String(a[14] || ''), upBy: String(a[15] || ''), upAt: String(a[16] || '') });
+  const toPed = a => ({ id: a[0], fc: Cupo.dayOf(a[1]), no: String(a[2] || ''), fe: Cupo.dayOf(a[3]), cli: Cupo.norm(a[4]), fa: String(a[5] || ''), to: Number(a[6]) || 0, acc: String(a[10] || ''), resp: String(a[11] || ''), obs: String(a[12] || ''), by: String(a[13] || ''), at: String(a[14] || ''), upBy: String(a[15] || ''), upAt: String(a[16] || ''), sH: String(a[7] || ''), sI: a[8] == null ? '' : String(a[8]), sJ: String(a[9] || '') });
   function ultimos() { const mx = new Map(); for (const q of peds) { const m = /^([A-Za-z]+)(\d+)$/.exec(q.no || ''); if (m) { const k = m[1].toUpperCase(); mx.set(k, Math.max(mx.get(k) || 0, +m[2])); } } return mx; }
   function showLast() { const el = $('#lastno'); if (!el) return; const mx = ultimos(); let best = ''; for (const q of peds) if (/^[A-Za-z]+\d+$/.test(q.no || '') && (!best || q.no.length > best.length || (q.no.length === best.length && q.no > best))) best = q.no; el.textContent = best ? '(' + best + ')' : ''; }
   let excKey = null, excMap = null;
   function evOpts() { if (excKey !== meta.excTxt) { excKey = meta.excTxt; excMap = Cupo.buildExc(Cupo.parseExcepciones(meta.excTxt)); } return { residual: meta.residual, exc: excMap }; }
   function cfgFrom(r) { if (!r) return; if (r.umbral) meta.umbral = r.umbral; if (r.residual != null) meta.residual = Number(r.residual) || 0; if (r.excepciones != null) meta.excTxt = String(r.excepciones); }
   function reindex() { B = base.length ? Cupo.indexBase(base) : null; C = Cupo.indexCartera(car); }
-  function recalc() { today = Cupo.todayN(); EV = B ? Cupo.evaluate(peds, B, C, today, meta.umbral, evOpts()) : peds.map(() => ({ J: 'FALTAN BASES', H: 'NO APROBADO', I: '', found: false, Q: null, P: null })); }
+  /* Todo pedido queda FIJO con el resultado guardado: cargar bases/cartera o cambiar reglas solo afecta a los pedidos nuevos.
+     El detalle de facturas vencidas se guarda dentro de observacion_cupo, separado por ' ¦ '. */
+  let fijando = false; const SEP = ' ¦ ';
+  const sJ = e => e.J + ((e.vdet && e.vdet.length) ? SEP + e.vdet.join(SEP) + (e.vmas ? SEP + '+' + e.vmas + ' más' : '') : '');
+  const NOSOLV = /CLIENTE NO ENCONTRADO|VERIFICAR CUPO|INGRESAR FECHA|FALTAN BASES/;
+  function recalc() { today = Cupo.todayN(); EV = B ? Cupo.evaluate(peds, B, C, today, meta.umbral, evOpts()) : peds.map(() => ({ J: 'FALTAN BASES', H: 'NO APROBADO', I: '', found: false, Q: null, P: null }));
+    if (!B) return; const nuevos = [];
+    peds.forEach((p, i) => { const e = EV[i];
+      if (p.sH === 'APROBADO' || p.sH === 'NO APROBADO') { const pt = (p.sJ || e.J).split(SEP), j = pt[0];
+        EV[i] = Object.assign({}, e, { H: p.sH, I: p.sI, J: j, vdet: pt.slice(1), vmas: 0, bloq: p.sH === 'NO APROBADO' ? !NOSOLV.test(j) : p.acc === 'SOLUCIONADO', insuf: j.includes('CUPO INSUFICIENTE'), fijo: true }); }
+      else if (p.sH === '' && p.id) nuevos.push({ p, id: p.id, H: e.H, I: e.I, J: sJ(e) }); });
+    if (nuevos.length && can('VALIDADOR') && !fijando) { fijando = true; api('fijar', { items: nuevos.map(x => ({ id: x.id, H: x.H, I: x.I, J: x.J })) }).then(() => { nuevos.forEach(x => { x.p.sH = x.H; x.p.sI = String(x.I); x.p.sJ = x.J; }); }).catch(() => { }).finally(() => { fijando = false; }); }
+  }
   async function loadBases(force) {
     const cv = force ? {} : { baseV: await kvGet('bv'), carV: await kvGet('cv') };
     const r = await api('bases', cv); cfgFrom(r);
@@ -353,9 +367,9 @@ if (typeof module !== 'undefined') module.exports = Cupo;
     const have = new Set(peds.map(p => p.no).filter(Boolean)); let dup = 0; const nuevos = []; for (const p of lista) { if (p.no && have.has(p.no)) { dup++; continue; } have.add(p.no); nuevos.push(p); }
     if (!nuevos.length) { $('#addmsg').textContent = `0 agregados` + (viejos ? ` · ${viejos} anteriores al último registrado` : '') + (dup ? ` · ${dup} omitidos por N° interno repetido` : '') + '.'; return; }
     const ev = Cupo.evaluate(peds.concat(nuevos), B, C, today, meta.umbral, evOpts()).slice(peds.length);
-    const items = nuevos.map((p, i) => ({ fc: Cupo.isoD(p.fc), no: p.no, fe: p.fe != null ? Cupo.isoD(p.fe) : '', cli: p.cli, fa: p.fa, to: p.to, acc: '', res: { H: ev[i].H, I: ev[i].I, J: ev[i].J } }));
+    const items = nuevos.map((p, i) => ({ fc: Cupo.isoD(p.fc), no: p.no, fe: p.fe != null ? Cupo.isoD(p.fe) : '', cli: p.cli, fa: p.fa, to: p.to, acc: '', res: { H: ev[i].H, I: ev[i].I, J: sJ(ev[i]) } }));
     $('#add').disabled = true;
-    try { const r = await api('addPedidos', { items }); await loadPedidos(true); recalc(); $('#paste').value = ''; fillFc(Cupo.isoD(fc)); render(); $('#addmsg').textContent = `${r.agregados} agregados y guardados en línea` + (viejos ? ` · ${viejos} omitidos por ser anteriores al último registrado` : '') + (dup + r.repetidos ? ` · ${dup + r.repetidos} omitidos por N° interno repetido` : '') + (bad.length ? ` · ${bad.length} líneas ilegibles` : '') + '.'; }
+    try { const r = await api('addPedidos', { items }); await loadPedidos(true); recalc(); $('#paste').value = ''; fillFc(Cupo.isoD(fc)); page = 1e9; render(); { const tr = $('#tb').lastElementChild; if (tr && tr.scrollIntoView) tr.scrollIntoView({ block: 'center' }); } $('#addmsg').textContent = `${r.agregados} agregados y guardados en línea` + (viejos ? ` · ${viejos} omitidos por ser anteriores al último registrado` : '') + (dup + r.repetidos ? ` · ${dup + r.repetidos} omitidos por N° interno repetido` : '') + (bad.length ? ` · ${bad.length} líneas ilegibles` : '') + '.'; }
     catch (e) { handleErr(e); } $('#add').disabled = false;
   });
   function fillFc(sel) { const set = [...new Set(peds.map(p => p.fc).filter(x => x != null))].sort((a, b) => b - a); const cur = sel || $('#ffc').value; $('#ffc').innerHTML = '<option value="">Todas</option>' + set.map(d => `<option value="${Cupo.isoD(d)}">${Cupo.fmtD(d)}</option>`).join(''); $('#ffc').value = set.some(d => Cupo.isoD(d) === cur) ? cur : (set.length ? Cupo.isoD(set[0]) : ''); }
@@ -380,9 +394,9 @@ if (typeof module !== 'undefined') module.exports = Cupo;
   }
   $('#tb').addEventListener('change', async e => {
     const tr = e.target.closest('tr'); if (!tr || !can('VALIDADOR')) return; const i = +tr.dataset.i, f = e.target.dataset.f; if (!f) return; const p = peds[i];
-    const antes = p[f]; p[f] = e.target.value; recalc(); const ev = EV[i]; if (f === 'acc') render();
-    try { await api('updatePedido', { id: p.id, campo: f, valor: p[f], res: { H: ev.H, I: ev.I, J: ev.J } }); p.upBy = user.correo; toast('Cambio guardado.'); }
-    catch (er) { p[f] = antes; handleErr(er); await loadPedidos(true).catch(() => { }); recalc(); render(); }
+    const antes = p[f]; const sv = [p.sH, p.sI, p.sJ]; p[f] = e.target.value; if (f === 'acc') p.sH = '~'; recalc(); const ev = EV[i]; if (f === 'acc') render();
+    try { await api('updatePedido', f === 'acc' ? { id: p.id, campo: f, valor: p[f], res: { H: ev.H, I: ev.I, J: sJ(ev) } } : { id: p.id, campo: f, valor: p[f] }); if (f === 'acc') { p.sH = ev.H; p.sI = String(ev.I); p.sJ = sJ(ev); recalc(); render(); } p.upBy = user.correo; toast('Cambio guardado.'); }
+    catch (er) { p[f] = antes; [p.sH, p.sI, p.sJ] = sv; handleErr(er); await loadPedidos(true).catch(() => { }); recalc(); render(); }
   });
   $('#tb').addEventListener('click', async e => {
     if (!e.target.matches('[data-del]')) return; const i = +e.target.closest('tr').dataset.i, p = peds[i];
@@ -406,14 +420,14 @@ if (typeof module !== 'undefined') module.exports = Cupo;
   const upBase = async rows => { setSt('Subiendo base de clientes…'); await api('setBase', { rows }); };
   const upCar = async rows => { setSt('Subiendo cartera…'); await api('setCartera', { rows: rows.map(r => [r[0], r[1] != null ? Cupo.isoD(r[1]) : '', r[2], r[3], r[4] || 0, r[5] || '', r[6] || '']) }); };
   const after = async () => { await loadBases(true); recalc(); status(); fillFc(); render(); };
-  $('#f-base').addEventListener('change', e => { const f = e.target.files[0]; if (!f) return; guarded(async () => { const wb = await readWb(f); const rows = Cupo.parseBase(rowsOf(sheetBy(wb, /base|client/i) || wb.worksheets[0])); await upBase(rows); await after(); toast('Base de clientes actualizada en línea: ' + rows.length.toLocaleString('de-DE') + ' clientes.'); }); e.target.value = ''; });
+  $('#f-base').addEventListener('change', e => { const f = e.target.files[0]; if (!f) return; guarded(async () => { const wb = await readWb(f); const rows = Cupo.parseBase(rowsOf(sheetBy(wb, /base|client/i) || wb.worksheets[0])); await upBase(rows); await after(); toast('Base de clientes actualizada en línea: ' + rows.length.toLocaleString('de-DE') + ' clientes.' + (rows.corregido ? ' (El cupo venía en la columna DIAS CREDITO; se corrigió automáticamente.)' : '')); }); e.target.value = ''; });
   $('#f-car').addEventListener('change', e => { const f = e.target.files[0]; if (!f) return; guarded(async () => { const wb = await readWb(f); const rows = Cupo.parseCartera(rowsOf(sheetBy(wb, /cartera/i) || wb.worksheets[0])); await upCar(rows); await after(); toast('Cartera actualizada en línea: ' + rows.length.toLocaleString('de-DE') + ' líneas.'); }); e.target.value = ''; });
   $('#f-all').addEventListener('change', e => { const f = e.target.files[0]; if (!f) return; guarded(async () => {
     const wb = await readWb(f); const wb1 = sheetBy(wb, /base/i), wc = sheetBy(wb, /cartera/i), wp = sheetBy(wb, /pedido/i); if (!wb1 && !wc) throw new Error('No encontré las hojas BASE CLIENTES ni CARTERA en ese archivo.');
     const parts = []; if (wb1) { const r = Cupo.parseBase(rowsOf(wb1)); await upBase(r); parts.push(r.length.toLocaleString('de-DE') + ' clientes'); } if (wc) { const r = Cupo.parseCartera(rowsOf(wc)); await upCar(r); parts.push(r.length.toLocaleString('de-DE') + ' líneas de cartera'); }
     await after();
     if (wp && $('#imp-ped').checked) { const inc = Cupo.parsePedidosSheet(rowsOf(wp)); const have = new Set(peds.map(p => p.no).filter(Boolean)); const nue = inc.filter(p => !(p.no && have.has(p.no))); const ev = Cupo.evaluate(nue, B, C, today, meta.umbral, evOpts());
-      const items = nue.map((p, i) => ({ fc: p.fc != null ? Cupo.isoD(p.fc) : '', no: p.no, fe: p.fe != null ? Cupo.isoD(p.fe) : '', cli: p.cli, fa: p.fa, to: p.to, acc: p.acc || '', resp: p.resp, obs: p.obs, res: { H: ev[i].H, I: ev[i].I, J: ev[i].J } }));
+      const items = nue.map((p, i) => ({ fc: p.fc != null ? Cupo.isoD(p.fc) : '', no: p.no, fe: p.fe != null ? Cupo.isoD(p.fe) : '', cli: p.cli, fa: p.fa, to: p.to, acc: p.acc || '', resp: p.resp, obs: p.obs, res: { H: ev[i].H, I: ev[i].I, J: sJ(ev[i]) } }));
       let n = 0; for (let k = 0; k < items.length; k += 400) { setSt('Importando pedidos ' + Math.min(k + 400, items.length) + ' de ' + items.length + '…'); const r = await api('addPedidos', { items: items.slice(k, k + 400), importar: true }); n += r.agregados; }
       await loadPedidos(true); recalc(); fillFc(); render(); parts.push(n + ' pedidos'); }
     toast('Cargado en línea: ' + parts.join(', ') + '.'); }); e.target.value = ''; });
