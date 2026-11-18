@@ -342,7 +342,7 @@ if (typeof module !== 'undefined') module.exports = Cupo;
     } catch (e) { started = false; if (e.code === 'NO_AUTORIZADO') showLogin(e.message, true); else { showLogin('No se pudo conectar: ' + (e.message || e)); } console.error(e); }
   }
   function setupUser() {
-    $('#who').innerHTML = `<div><b>${esc(user.nombre)}</b><span class="badge">${esc(user.rol)}</span></div><div>${esc(user.correo)}</div><div id="sync"></div><div><button class="lk" id="b-ref">Actualizar ahora</button> · <button class="lk" id="b-out">Salir</button></div>`;
+    $('#who').innerHTML = `<div><b>${esc(user.nombre)}</b><span class="badge">${esc(user.rol)}</span></div><div>${esc(user.correo)}</div><div id="sync"></div><div style="opacity:.7;font-size:11px">Versión 18-nov-2026 · pedidos fijos</div><div><button class="lk" id="b-ref">Actualizar ahora</button> · <button class="lk" id="b-out">Salir</button></div>`;
     $('#b-ref').onclick = () => refresh(false); $('#b-out').onclick = logout;
     const val = can('VALIDADOR'), adm = can('ADMIN');
     $('#addcard').hidden = !val; $('#nav-log').hidden = !val; $$('.adm').forEach(e => e.hidden = !adm); $('#noadm').hidden = adm ? true : false; $('#umbral').disabled = !adm; $('#umbral').value = meta.umbral; $('#delview').hidden = !val; $('#montomin').disabled = !adm; $('#montomin').value = meta.residual; $('#exc').disabled = !adm; $('#exc').value = meta.excTxt; $('#excsave').hidden = !adm; $('#excn').textContent = Cupo.parseExcepciones(meta.excTxt).length;
